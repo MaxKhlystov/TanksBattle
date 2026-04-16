@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tank Battles - Все данные БД</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
+        h1 { color: #2c3e50; }
+        h2 { color: #34495e; border-bottom: 2px solid #7f8c8d; padding-bottom: 5px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 30px; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+        th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+        th { background-color: #2c3e50; color: white; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Панель управления танковыми сражениями</h1>
+        <p>Все данные из базы данных на текущий момент.</p>
+
+        <!-- Нации -->
+        <h2>Нации</h2>
+        <table>
+            <thead>
+                <tr><th>ID</th><th>Название</th><th>Флаг</th></tr>
+            </thead>
+            <tbody>
+                {% for nation in nations %}
+                <tr>
+                    <td>{{ nation.id }}</td>
+                    <td>{{ nation.name }}</td>
+                    <td>
+                        {% if nation.flag %}
+                            <img src="{{ nation.flag.url }}" alt="{{ nation.name }}" width="50">
+                        {% else %}
+                            нет флага
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="3">Нет наций</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <!-- Уровни -->
+        <h2>Уровни танков</h2>
+        <table>
+            <thead>
+                <tr><th>ID</th><th>Уровень</th><th>Базовая стоимость</th><th>Стоимость создания</th><th>Стоимость повышения (до след.)</th><th>Награда за бой</th></tr>
+            </thead>
+            <tbody>
+                {% for level in levels %}
+                <tr>
+                    <td>{{ level.id }}</td>
+                    <td>{{ level.level_number }}</td>
+                    <td>{{ level.base_cost }}</td>
+                    <td>{{ level.creation_cost }}</td>
+                    <td>{{ level.upgrade_to_next_cost|default:"-" }}</td>
+                    <td>{{ level.battle_reward }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6">Нет уровней</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <!-- Игроки (Crewman) -->
+        <h2>Игроки (экипаж)</h2>
+        <table>
+            <thead>
+                <tr><th>ID</th><th>Пользователь</th><th>Кредиты</th><th>Мест в ангаре</th><th>Свободно мест</th><th>Дата регистрации</th></tr>
+            </thead>
+            <tbody>
+                {% for crewman in crewmen %}
+                <tr>
+                    <td>{{ crewman.id }}</td>
+                    <td>{{ crewman.user.username }}</td>
+                    <td>{{ crewman.credits }}</td>
+                    <td>{{ crewman.garage_slots }}</td>
+                    <td>{{ crewman.available_garage_slots }}</td>
+                    <td>{{ crewman.created_at|date:"Y-m-d H:i" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6">Нет игроков</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <!-- Танки -->
+        <h2>Танки</h2>
+        <table>
+            <thead>
+                <tr><th>ID</th><th>Название</th><th>Владелец</th><th>Нация</th><th>Уровень</th><th>Урон/мин</th><th>В бою?</th><th>Создан</th></tr>
+            </thead>
+            <tbody>
+                {% for tank in tanks %}
+                <tr>
+                    <td>{{ tank.id }}</td>
+                    <td>{{ tank.name }}</td>
+                    <td>{{ tank.owner.user.username }}</td>
+                    <td>{{ tank.nation.name }}</td>
+                    <td>{{ tank.level.level_number }}</td>
+                    <td>{{ tank.dpm }}</td>
+                    <td>{{ tank.is_in_battle|yesno:"Да,Нет" }}</td>
+                    <td>{{ tank.created_at|date:"Y-m-d H:i" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="8">Нет танков</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <!-- Записи боёв -->
+        <h2>История боёв</h2>
+        <table>
+            <thead>
+                <tr><th>ID</th><th>Танк</th><th>Игрок</th><th>Уровень боя</th><th>Результат</th><th>Награда</th><th>Начало</th><th>Окончание</th></tr>
+            </thead>
+            <tbody>
+                {% for battle in battles %}
+                <tr>
+                    <td>{{ battle.id }}</td>
+                    <td>{{ battle.tank.name }}</td>
+                    <td>{{ battle.crewman.user.username }}</td>
+                    <td>{{ battle.battle_level.level_number }}</td>
+                    <td>{{ battle.get_result_display }}</td>
+                    <td>{{ battle.reward_earned }}</td>
+                    <td>{{ battle.started_at|date:"Y-m-d H:i:s" }}</td>
+                    <td>{{ battle.finished_at|date:"Y-m-d H:i:s"|default:"не завершён" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="8">Нет боёв</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
