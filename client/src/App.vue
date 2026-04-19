@@ -144,13 +144,13 @@ onBeforeMount(async () => {
                         <li v-if="userInfo && userInfo.is_authenticated">
                             <router-link class="nav-link" to="/battle-history">История</router-link>
                         </li>
-                        <li v-if="userInfo.is_staff && userInfo.second">
+                        <li v-if="userInfo.is_staff">
                             <router-link class="nav-link" to="/levels">Уровни</router-link>
                         </li>
-                        <li v-if="userInfo.is_staff && userInfo.second">
+                        <li v-if="userInfo.is_staff">
                             <router-link class="nav-link" to="/nations">Нации</router-link>
                         </li>
-                        <li v-if="userInfo.is_staff && userInfo.second">
+                        <li v-if="userInfo.is_staff">
                             <router-link class="nav-link" to="/stats">Статистика</router-link>
                         </li>
                         <li v-if="userInfo.is_staff && userInfo.second">
@@ -158,7 +158,6 @@ onBeforeMount(async () => {
                         </li>
                     </ul>
                     <ul class="nav-list ms-auto">
-                        <!-- Кнопка 2FA для суперюзера -->
                         <li v-if="userInfo && userInfo.is_authenticated && userInfo.is_staff && !userInfo.second">
                             <button class="btn-custom-warning" @click="getTotpKey">
                                 🔐 2FA

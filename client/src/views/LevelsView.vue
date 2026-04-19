@@ -1,9 +1,10 @@
 <script setup>
-import { onBeforeMount, ref } from 'vue';
+import { onBeforeMount, ref, computed } from 'vue';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
 import { storeToRefs } from "pinia";
 import { showSuccess, showError } from '@/utils/notifications';
+import Swal from 'sweetalert2';
 
 const userStore = useUserStore();
 const tanksStore = useTanksStore();
@@ -12,8 +13,6 @@ const { userInfo } = storeToRefs(userStore);
 const { levels } = storeToRefs(tanksStore);
 
 const newLevelNumber = ref(null);
-const editLevel = ref(null);
-const showEditModal = ref(false);
 const levelError = ref('');
 
 onBeforeMount(async () => {
@@ -50,25 +49,17 @@ async function createLevel() {
     }
 }
 
-async function updateLevel() {
-    if (editLevel.value) {
-        try {
-            await tanksStore.updateLevel(editLevel.value.id, {
-                level_number: editLevel.value.level_number
-            });
-            showEditModal.value = false;
-            editLevel.value = null;
-            showSuccess('Уровень обновлён', `Уровень обновлён до ${editLevel.value.level_number}`);
-        } catch (err) {
-            showError('Ошибка', 'Не удалось обновить уровень');
-        }
-    }
-}
-
 async function deleteLevel(id) {
+    const level = levels.value.find(l => l.id === id);
+    
+    if (level.level_number !== maxLevelNumber.value) {
+        showError('Ошибка', `Нельзя удалить уровень ${level.level_number}. Можно удалить только последний уровень (${maxLevelNumber.value}).`);
+        return;
+    }
+    
     const result = await Swal.fire({
         title: 'Удалить уровень?',
-        text: 'Это также удалит все связанные танки!',
+        text: `Это удалит все танки ${level.level_number} уровня и вернёт владельцам полную стоимость (${level.creation_cost} кредитов за танк)!`,
         icon: 'warning',
         showCancelButton: true,
         confirmButtonColor: '#dc3545',
@@ -84,15 +75,16 @@ async function deleteLevel(id) {
             await tanksStore.deleteLevel(id);
             showSuccess('Уровень удалён', 'Уровень успешно удалён');
         } catch (err) {
-            showError('Ошибка', 'Не удалось удалить уровень');
+            showError('Ошибка', err.response?.data?.error || 'Не удалось удалить уровень');
         }
     }
 }
 
-function openEditModal(level) {
-    editLevel.value = { ...level };
-    showEditModal.value = true;
-}
+const maxLevelNumber = computed(() => {
+    if (!levels.value.length) return 0;
+    return Math.max(...levels.value.map(l => l.level_number));
+});
+
 </script>
 
 <template>
@@ -100,7 +92,7 @@ function openEditModal(level) {
         <div v-if="userInfo && userInfo.is_authenticated && userInfo.is_staff">
             <div class="custom-card mb-4">
                 <div class="custom-card-header bg-danger">Управление уровнями</div>
-                <div class="custom-card-body">
+                <div class="custom-card-body" v-if="userInfo.is_staff && userInfo.second">
                     <h5>Добавить уровень</h5>
                     <div v-if="levelError" class="alert-custom-danger">{{ levelError }}</div>
                     <div class="row">
@@ -128,7 +120,7 @@ function openEditModal(level) {
                                 <th>Уровень</th>
                                 <th>Стоимость создания</th>
                                 <th>Награда за бой</th>
-                                <th>Действия</th>
+                                <th v-if="userInfo.second">Действия</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -137,9 +129,9 @@ function openEditModal(level) {
                                 <td><strong>{{ level.level_number }}</strong></td>
                                 <td>{{ level.creation_cost }} 💰</td>
                                 <td>{{ level.battle_reward }} 💰</td>
-                                <td class="action-buttons">
-                                    <button class="btn-custom-warning btn-sm" @click="openEditModal(level)">✏️</button>
-                                    <button class="btn-custom-danger btn-sm" @click="deleteLevel(level.id)">🗑️</button>
+                                <td v-if="userInfo.second" class="action-buttons">
+                                    <button class="btn-custom-danger btn-sm" @click="deleteLevel(level.id)" 
+                                    :disabled="level.level_number !== maxLevelNumber">🗑️</button>
                                 </td>
                             </tr>
                         </tbody>
@@ -148,34 +140,9 @@ function openEditModal(level) {
             </div>
         </div>
         <div v-else-if="userInfo && userInfo.is_authenticated && userInfo.is_staff && !userInfo.second" class="alert-custom-warning">
-            Для создания/редактирования уровней рекомендуется двухфакторная аутентификация
+            Для создания уровней рекомендуется двухфакторная аутентификация
         </div>
         <div v-else class="alert-custom-warning">Доступ только для администраторов</div>
-    </div>
-
-    <!-- Модалка редактирования -->
-    <div v-if="showEditModal" class="modal-overlay">
-        <div class="modal-dialog-custom">
-            <div class="custom-modal-content">
-                <div class="custom-modal-header">
-                    <h5>Редактировать уровень</h5>
-                    <button class="close-btn" @click="showEditModal = false">&times;</button>
-                </div>
-                <div class="custom-modal-body">
-                    <div class="form-group">
-                        <label>Номер уровня</label>
-                        <input type="number" class="custom-form-control" v-model="editLevel.level_number">
-                    </div>
-                    <div class="alert-custom-info mt-2">
-                        <small>⚠️ Изменение номера уровня повлияет на стоимость создания и награду!</small>
-                    </div>
-                </div>
-                <div class="custom-modal-footer">
-                    <button class="btn-custom-secondary" @click="showEditModal = false">Отмена</button>
-                    <button class="btn-custom-primary" @click="updateLevel">Сохранить</button>
-                </div>
-            </div>
-        </div>
     </div>
 </template>
 

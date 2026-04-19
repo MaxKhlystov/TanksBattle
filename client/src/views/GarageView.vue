@@ -1,5 +1,5 @@
 <script setup>
-import { onBeforeMount, onMounted, ref, watch, inject, computed } from 'vue';
+import { onBeforeMount, onMounted, ref, watch, inject, onUnmounted } from 'vue';
 import axios from 'axios';
 import Cookies from 'js-cookie';
 import { useUserStore } from '@/stores/user_store';
@@ -10,11 +10,11 @@ import { showSuccess, showError } from '@/utils/notifications';
 const userStore = useUserStore();
 const tanksStore = useTanksStore();
 const openImageViewer = inject('openImageViewer');
+const selectedUserData = ref(null); // данные выбранного пользователя (кредиты, слоты)
 
-// Используем storeToRefs для всех реактивных данных из store
 const { userInfo } = storeToRefs(userStore);
-const { myTanks, levels, nations, allCrewmen } = storeToRefs(tanksStore);
-const { fetchAllCrewmen, fetchMyTanks, fetchLevels, fetchNations, upgradeTank, sellTank } = tanksStore;
+const { myTanks, levels, nations, allCrewmen, battles } = storeToRefs(tanksStore);
+const { fetchAllCrewmen, fetchMyTanks, fetchLevels, fetchNations, upgradeTank, sellTank, fetchBattles } = tanksStore;
 
 // Локальное состояние
 const selectedTank = ref(null);
@@ -30,6 +30,51 @@ const loading = ref(false);
 const filters = ref({ nation: null, level: null, is_in_battle: null });
 const selectedUserId = ref(null);
 
+// Таймеры для танков в бою
+const battleTimers = ref({});
+let timerInterval = null;
+
+// Функция обновления таймеров для всех танков в бою
+async function updateBattleTimers() {
+    const tanksInBattle = myTanks.value?.filter(t => t.is_in_battle) || [];
+    if (tanksInBattle.length === 0) return;
+    
+    // Получаем активные бои
+    await fetchBattles();
+    const activeBattles = battles.value.filter(b => b.result === 'pending');
+    
+    for (const tank of tanksInBattle) {
+        const activeBattle = activeBattles.find(b => b.tank === tank.id);
+        if (activeBattle) {
+            const timeData = await tanksStore.getBattleRemainingTime(activeBattle.id);
+            battleTimers.value[tank.id] = {
+                remaining: timeData.remaining,
+                total: timeData.total_duration,
+                battleId: activeBattle.id
+            };
+        } else if (tank.is_in_battle) {
+            // Если боя нет, но танк помечен как в бою - обновляем статус
+            await fetchMyTanks();
+        }
+    }
+}
+
+// Запускаем интервал обновления таймеров
+function startTimerUpdates() {
+    if (timerInterval) clearInterval(timerInterval);
+    timerInterval = setInterval(() => {
+        if (myTanks.value?.some(t => t.is_in_battle)) {
+            updateBattleTimers();
+        }
+    }, 1000);
+}
+
+// Форматирование времени
+function formatBattleTime(seconds) {
+    if (seconds <= 0) return 'Завершается...';
+    return `${seconds} сек`;
+}
+
 // Сохраняем selectedUserId в sessionStorage
 watch(selectedUserId, (newVal) => {
     if (newVal) {
@@ -39,7 +84,6 @@ watch(selectedUserId, (newVal) => {
     }
 });
 
-// Загрузка танков с учётом выбранного пользователя
 async function loadTanks() {
     console.log("=== loadTanks START ===");
     console.log("selectedUserId.value:", selectedUserId.value);
@@ -54,10 +98,17 @@ async function loadTanks() {
         console.log("Response data:", response.data);
         console.log("Response data length:", response.data.length);
         myTanks.value = response.data;
-        console.log("myTanks.value after assignment:", myTanks.value);
+        
+        // Загружаем данные пользователя (кредиты и слоты) из allCrewmen
+        const selectedUser = allCrewmen.value.find(c => c.id === selectedUserId.value);
+        if (selectedUser) {
+            selectedUserData.value = selectedUser;
+            console.log("Selected user data:", selectedUserData.value);
+        }
     } else {
         console.log("Loading my own tanks");
         await fetchMyTanks();
+        selectedUserData.value = null; // сбрасываем при просмотре своего ангара
         console.log("myTanks.value after fetchMyTanks:", myTanks.value);
     }
     console.log("=== loadTanks END ===");
@@ -103,7 +154,7 @@ async function loadAllData() {
         // 1. Обновляем информацию о пользователе
         await userStore.checkLogin();
         console.log("User info loaded, credits:", userInfo.value.credits);
-        
+
         // 2. Загружаем танки
         await loadTanks();
         console.log("Tanks loaded, count:", myTanks.value?.length || 0);
@@ -116,10 +167,19 @@ async function loadAllData() {
             await fetchNations();
         }
         
-        // 4. Для суперюзера с 2FA загружаем список пользователей
+        // 4. Загружаем бои для таймеров
+        await fetchBattles();
+        
+        // 5. Для суперюзера с 2FA загружаем список пользователей
         if (userInfo.value.is_staff && userInfo.value.second && (!allCrewmen.value || allCrewmen.value.length === 0)) {
             await fetchAllCrewmen();
         }
+        
+        // 6. Запускаем обновление таймеров
+        await updateBattleTimers();
+        startTimerUpdates();
+
+        
     } catch (error) {
         console.error('Ошибка загрузки данных:', error);
     } finally {
@@ -143,6 +203,11 @@ onBeforeMount(() => {
     }
 });
 
+// Останавливаем интервал при размонтировании
+onUnmounted(() => {
+    if (timerInterval) clearInterval(timerInterval);
+});
+
 // Основная загрузка при монтировании
 onMounted(() => {
     loadAllData();
@@ -160,8 +225,23 @@ function getNationName(nationId) {
 }
 
 function getUpgradeCost(tank) {
-    const currentLevel = tanksStore.getLevelInfo(tank.level);
-    return currentLevel?.upgrade_to_next_cost || null;
+    console.log("=== getUpgradeCost Debug ===");
+    console.log("Tank name:", tank.name);
+    console.log("Tank level_number:", tank.level_number);
+    console.log("All levels:", levels.value.map(l => ({level_number: l.level_number, upgrade_to_next_cost: l.upgrade_to_next_cost})));
+    
+    const currentLevel = levels.value.find(l => l.level_number === tank.level_number);
+    console.log("Found currentLevel:", currentLevel);
+    
+    if (!currentLevel) {
+        console.log("Current level not found!");
+        return null;
+    }
+    
+    const cost = currentLevel.upgrade_to_next_cost;
+    console.log("Returning cost:", cost);
+    
+    return cost || null;
 }
 
 async function handleUpgrade(tank) {
@@ -170,17 +250,20 @@ async function handleUpgrade(tank) {
 }
 
 async function confirmUpgrade() {
-    if (selectedTank.value) {
-        try {
-            await upgradeTank(selectedTank.value.id);
-            showUpgradeModal.value = false;
-            selectedTank.value = null;
-            await loadAllData();
-            showSuccess('Улучшение!', 'Танк успешно улучшен');
-        } catch (error) {
-            const errorMsg = error.response?.data?.error || 'Ошибка улучшения';
-            showError('Ошибка', errorMsg);
-        }
+    if (!selectedTank.value) return;
+    
+    // Сразу закрываем модальное окно
+    showUpgradeModal.value = false;
+    const tank = selectedTank.value;
+    selectedTank.value = null;
+    
+    try {
+        await upgradeTank(tank.id);
+        await loadAllData();
+        showSuccess('Улучшение!', 'Танк успешно улучшен');
+    } catch (error) {
+        const errorMsg = error.response?.data?.error || 'Ошибка улучшения';
+        showError('Ошибка', errorMsg);
     }
 }
 
@@ -190,11 +273,20 @@ async function handleSell(tank) {
 }
 
 async function confirmSell() {
-    if (selectedTank.value) {
-        await sellTank(selectedTank.value.id);
-        showSellModal.value = false;
-        selectedTank.value = null;
+    if (!selectedTank.value) return;
+    
+    // Сразу закрываем модальное окно
+    showSellModal.value = false;
+    const tank = selectedTank.value;
+    selectedTank.value = null;
+    
+    try {
+        await sellTank(tank.id);
         await loadAllData();
+        showSuccess('Продажа!', 'Танк успешно продан');
+    } catch (error) {
+        const errorMsg = error.response?.data?.error || 'Ошибка продажи';
+        showError('Ошибка', errorMsg);
     }
 }
 
@@ -226,6 +318,7 @@ async function saveEdit() {
     const formData = new FormData();
     formData.append('name', editForm.value.name);
     formData.append('nation', editForm.value.nation);
+    formData.append('level', editingTank.value.level);
     if (editPictureFile.value) {
         formData.append('picture', editPictureFile.value);
     }
@@ -269,7 +362,7 @@ async function exportToExcel() {
             <div v-else>
                 <!-- Выбор пользователя -->
                 <div v-if="userInfo.is_staff && userInfo.second" class="mb-3">
-                    <label>Посмотреть ангар пользователя:</label>
+                    <label class="text-white">Посмотреть ангар пользователя:</label>
                     <select class="custom-form-select" v-model="selectedUserId">
                         <option :value="null">-- Мой ангар --</option>
                         <option v-for="c in allCrewmen" :key="c.id" :value="c.id">
@@ -307,7 +400,7 @@ async function exportToExcel() {
                         <div class="custom-card bg-primary text-white">
                             <div class="custom-card-body">
                                 <h5>Кредиты</h5>
-                                <h2>{{ userInfo.credits || 0 }} 💰</h2>
+                                <h2>{{ selectedUserId && selectedUserData ? selectedUserData.credits : (userInfo.credits || 0) }} 💰</h2>
                             </div>
                         </div>
                     </div>
@@ -315,8 +408,9 @@ async function exportToExcel() {
                         <div class="custom-card bg-success text-white">
                             <div class="custom-card-body">
                                 <h5>Ангар</h5>
-                                <h2>{{ myTanks?.length || 0 }} / {{ userInfo.garage_slots || 3 }}</h2>
-                                <button v-if="(myTanks?.length || 0) >= (userInfo.garage_slots || 3)" 
+                                <h2>{{ myTanks?.length || 0 }} / {{ selectedUserId && selectedUserData ? selectedUserData.garage_slots : (userInfo.garage_slots || 3) }}</h2>
+                                <!-- Кнопка расширения ангара только для своего аккаунта -->
+                                <button v-if="!selectedUserId && (myTanks?.length || 0) >= (userInfo.garage_slots || 3)" 
                                         class="btn-custom-warning btn-sm mt-2" @click="expandGarage">
                                     + Место (500💰)
                                 </button>
@@ -353,8 +447,11 @@ async function exportToExcel() {
                             </p>
                             <p><strong>Урон/мин: </strong> {{ tank.dpm }}</p>
                             <p><strong>Статус: </strong> 
-                                <span :class="tank.is_in_battle ? 'text-danger' : 'text-success'">
-                                    {{ tank.is_in_battle ? 'В бою' : 'Готов' }}
+                                <span v-if="tank.is_in_battle" class="text-warning">
+                                    ⚔️ {{ battleTimers[tank.id]?.remaining > 0 ? formatBattleTime(battleTimers[tank.id].remaining) : 'В бою' }}
+                                </span>
+                                <span v-else class="text-success">
+                                    Готов
                                 </span>
                             </p>
                             <div class="d-flex gap-2 mt-3" v-if="!tank.is_in_battle">
@@ -370,7 +467,7 @@ async function exportToExcel() {
                                         title="Редактировать">✏️</button>
                             </div>
                             <div v-else class="alert-custom-warning text-center mt-2">
-                                ⚔️ В бою ⚔️
+                                ⚔️ {{ battleTimers[tank.id]?.remaining > 0 ? formatBattleTime(battleTimers[tank.id].remaining) : 'В бою' }}
                             </div>
                         </div>
                     </div>
@@ -386,7 +483,7 @@ async function exportToExcel() {
         </div>
     </div>
 
-    <!-- Модалки (оставляем как есть) -->
+    <!-- Модалки -->
     <div v-if="showUpgradeModal" class="modal-overlay">
         <div class="modal-dialog-custom">
             <div class="custom-modal-content">

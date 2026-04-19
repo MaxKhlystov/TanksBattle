@@ -13,6 +13,8 @@ from django.utils.decorators import method_decorator
 import pyotp
 import random
 import io
+import time
+import threading  # для асинхронной обработки
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 from django.http import HttpResponse
@@ -111,7 +113,43 @@ class LevelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
             stats['avg_level'] = 0
         
         return Response(stats)
-
+    
+    def destroy(self, request, *args, **kwargs):
+        level = self.get_object()
+        
+        # Проверка: удалить можно только последний уровень
+        max_level = Level.objects.aggregate(Max('level_number'))['level_number__max']
+        
+        if level.level_number != max_level:
+            return Response(
+                {'error': f'Нельзя удалить уровень {level.level_number}. Можно удалить только последний уровень ({max_level}).'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Находим все танки этого уровня
+        tanks = Tank.objects.filter(level=level)
+        
+        # Для каждого танка возвращаем полную стоимость владельцу
+        for tank in tanks:
+            if tank.is_in_battle:
+                # Отменяем бой, если танк в бою
+                battle = BattleRecord.objects.filter(tank=tank, result='pending').first()
+                if battle:
+                    battle.result = 'defeat'
+                    battle.reward_earned = 0
+                    battle.finished_at = timezone.now()
+                    battle.save()
+                tank.is_in_battle = False
+            
+            # Возвращаем полную стоимость создания
+            tank.owner.credits += tank.level.creation_cost
+            tank.owner.save()
+            tank.delete()
+        
+        # Удаляем уровень
+        level.delete()
+        
+        return Response({'success': True, 'message': f'Уровень {level.level_number} удалён. Возвращено кредитов: {sum(t.level.creation_cost for t in tanks)}'})
 
 # ---------------------- Crewman ----------------------
 class CrewmanViewSet(viewsets.GenericViewSet):
@@ -211,7 +249,7 @@ class CrewmanViewSet(viewsets.GenericViewSet):
 
 
 # ---------------------- Tank ----------------------
-class TankViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
+class TankViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin,
                   mixins.DestroyModelMixin, GenericViewSet):
     serializer_class = TankSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -309,7 +347,7 @@ class TankViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
         if not next_level:
             return Response({'error': 'Следующий уровень не найден'}, status=status.HTTP_400_BAD_REQUEST)
         
-        cost = next_level.upgrade_cost
+        cost = next_level.creation_cost//2
         print(f"Upgrade cost: {cost}")
         print(f"User credits: {tank.owner.credits}")
         
@@ -423,23 +461,33 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
         battle_level_id = request.data.get('battle_level_id')
         if not tank_id or not battle_level_id:
             return Response({'error': 'tank_id and battle_level_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
         crewman = Crewman.objects.get(user=self.request.user)
         try:
             tank = Tank.objects.get(id=tank_id, owner=crewman)
             battle_level = Level.objects.get(id=battle_level_id)
         except (Tank.DoesNotExist, Level.DoesNotExist):
             return Response({'error': 'Invalid tank or level'}, status=status.HTTP_400_BAD_REQUEST)
+        
         if tank.is_in_battle:
             return Response({'error': 'Tank already in battle'}, status=status.HTTP_400_BAD_REQUEST)
+        
         tank_lvl = tank.level.level_number
         if battle_level.level_number not in [tank_lvl - 1, tank_lvl, tank_lvl + 1]:
             return Response({'error': 'Battle level not available for this tank'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Расчет шанса победы
         if battle_level.level_number < tank_lvl:
             win_chance = 100
         elif battle_level.level_number == tank_lvl:
             win_chance = 75
         else:
             win_chance = 25
+        
+        # Длительность боя = уровень танка * 1 секунда
+        battle_duration = tank_lvl  # секунд
+        
+        # Создаем запись о бое
         battle_record = BattleRecord.objects.create(
             tank=tank,
             crewman=crewman,
@@ -448,11 +496,47 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
         )
         tank.is_in_battle = True
         tank.save()
-        r = random.randint(1, 100)
-        is_victory = (r <= win_chance)
-        battle_record.process_battle_result(is_victory)
+        
+        # Запускаем обработку боя в отдельном потоке (асинхронно)
+        def process_battle():
+            time.sleep(battle_duration)
+            # Небольшая пауза перед завершением
+            r = random.randint(1, 100)
+            is_victory = (r <= win_chance)
+            # Обновляем запись в БД
+            battle_record.refresh_from_db()
+            if battle_record.result == 'pending':  # Проверяем, что бой еще не завершен
+                battle_record.process_battle_result(is_victory)
+        
+        thread = threading.Thread(target=process_battle)
+        thread.daemon = True
+        thread.start()
+        
         serializer = BattleRecordSerializer(battle_record)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response({
+            'id': battle_record.id,
+            'battle_duration': battle_duration,
+            **serializer.data
+        }, status=status.HTTP_201_CREATED)
+        
+    @action(detail=True, methods=['GET'], url_path='remaining-time')
+    def remaining_time(self, request, pk=None):
+        battle = self.get_object()
+        if battle.result != 'pending':
+            return Response({'remaining': 0, 'finished': True, 'result': battle.result})
+        
+        # Рассчитываем оставшееся время
+        from django.utils import timezone
+        elapsed = (timezone.now() - battle.started_at).total_seconds()
+        tank_level = battle.tank.level.level_number
+        total_duration = tank_level  # секунд
+        remaining = max(0, total_duration - elapsed)
+        
+        return Response({
+            'remaining': int(remaining),
+            'finished': False,
+            'total_duration': total_duration
+        })
 
     @action(detail=True, methods=['GET'], url_path='result')
     def battle_result(self, request, pk=None):
@@ -482,7 +566,25 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
             stats['avg_reward'] = 0
         
         return Response(stats)
-
+    
+    @action(detail=True, methods=['POST'], url_path='cancel')
+    def cancel_battle(self, request, pk=None):
+        battle = self.get_object()
+        
+        if battle.result != 'pending':
+            return Response({'error': 'Бой уже завершён'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Отменяем бой
+        battle.result = 'defeat'
+        battle.reward_earned = 0
+        battle.finished_at = timezone.now()
+        battle.save()
+        
+        # Освобождаем танк
+        battle.tank.is_in_battle = False
+        battle.tank.save()
+        
+        return Response({'success': True, 'message': 'Бой отменён'})
 
 # ---------------------- User (аутентификация + 2FA) ----------------------
 class UserViewSet(viewsets.GenericViewSet):

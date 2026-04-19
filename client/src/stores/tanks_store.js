@@ -93,17 +93,6 @@ export const useTanksStore = defineStore("tanksStore", () => {
         }
     }
 
-    async function updateLevel(id, data) {
-        try {
-            const response = await axios.put(`/api/levels/${id}/`, data);
-            await fetchLevels();
-            return response.data;
-        } catch (error) {
-            console.error("Ошибка обновления уровня:", error);
-            throw error;
-        }
-    }
-
     async function deleteLevel(id) {
         try {
             await axios.delete(`/api/levels/${id}/`);
@@ -166,12 +155,24 @@ export const useTanksStore = defineStore("tanksStore", () => {
         }
     }
 
+    async function fetchBattlesByUser(userId) {
+        try {
+            const response = await axios.get(`/api/battles/?crewman=${userId}`);
+            battles.value = response.data;
+            return response.data;
+        } catch (error) {
+            console.error("Ошибка загрузки боёв пользователя:", error);
+        }
+    }
+
     async function startBattle(tankId, battleLevelId) {
         const response = await axios.post("/api/battles/start/", {
             tank_id: tankId,
             battle_level_id: battleLevelId
         });
         const battleId = response.data.id;
+        const battleDuration = response.data.battle_duration || 5;
+        
         return new Promise((resolve, reject) => {
             const interval = setInterval(async () => {
                 try {
@@ -187,11 +188,22 @@ export const useTanksStore = defineStore("tanksStore", () => {
                     reject(err);
                 }
             }, 1000);
+            
             setTimeout(() => {
                 clearInterval(interval);
                 reject(new Error('Бой не завершился вовремя'));
-            }, 10000);
+            }, (battleDuration + 5) * 1000);
         });
+    }
+
+    async function getBattleRemainingTime(battleId) {
+        try {
+            const response = await axios.get(`/api/battles/${battleId}/remaining-time/`);
+            return response.data;
+        } catch (error) {
+            console.error('Ошибка получения времени боя:', error);
+            return { remaining: 0, finished: true };
+        }
     }
 
     async function fetchAllCrewmen() {
@@ -224,7 +236,6 @@ export const useTanksStore = defineStore("tanksStore", () => {
         sellTank,
         fetchLevels,
         createLevel,
-        updateLevel,
         deleteLevel,
         fetchNations,
         createNation,
@@ -234,6 +245,8 @@ export const useTanksStore = defineStore("tanksStore", () => {
         startBattle,
         fetchAllCrewmen,
         getLevelInfo,
-        getNationInfo
+        getNationInfo,
+        getBattleRemainingTime,
+        fetchBattlesByUser,
     };
 });

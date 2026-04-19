@@ -3,6 +3,7 @@ import { onBeforeMount, ref, watch } from 'vue';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
 import { storeToRefs } from "pinia";
+import { showSuccess, showError } from '@/utils/notifications';
 
 const userStore = useUserStore();
 const tanksStore = useTanksStore();

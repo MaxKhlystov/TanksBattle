@@ -54,10 +54,10 @@ function onEditFlagChange(event) { editFlagFile.value = event.target.files[0]; }
 
 <template>
     <div class="custom-container">
-        <div v-if="userInfo && userInfo.is_authenticated && userInfo.is_staff && userInfo.second">
+        <div v-if="userInfo && userInfo.is_authenticated && userInfo.is_staff">
             <div class="custom-card mb-4">
                 <div class="custom-card-header bg-danger">Управление нациями</div>
-                <div class="custom-card-body">
+                <div class="custom-card-body" v-if="userInfo.second">
                     <h5>Добавить нацию</h5>
                     <div class="row">
                         <div class="col-md-5">
@@ -82,8 +82,8 @@ function onEditFlagChange(event) { editFlagFile.value = event.target.files[0]; }
                                 <div v-else style="font-size: 40px;">🚩</div>
                             </div>
                             <h5>{{ nation.name }}</h5>
-                            <button class="btn-custom-warning btn-sm me-1" @click="openEditModal(nation)">✏️</button>
-                            <button class="btn-custom-danger btn-sm" @click="deleteNation(nation.id)">🗑️</button>
+                            <button class="btn-custom-warning btn-sm me-1"  v-if="userInfo.second" @click="openEditModal(nation)">✏️</button>
+                            <button class="btn-custom-danger btn-sm"  v-if="userInfo.second" @click="deleteNation(nation.id)">🗑️</button>
                         </div>
                     </div>
                 </div>
