@@ -12,19 +12,29 @@ export const useTanksStore = defineStore("tanksStore", () => {
     const battles = ref([]);
     const allCrewmen = ref([]);
 
-    async function fetchMyTanks() {
+    async function fetchTanks(params = {}) {
         try {
-            const response = await axios.get("/api/tanks/");
-            console.log("fetchMyTanks response:", response.data);
-            console.log("fetchMyTanks response length:", response.data.length);
-            myTanks.value = [...response.data];  // создаём новый массив
-            console.log("myTanks.value after assignment:", myTanks.value.length);
-            return myTanks.value;
+            const response = await axios.get('/api/tanks/', { params });
+            myTanks.value = response.data;
+            return response.data;
         } catch (error) {
-            console.error("Ошибка загрузки танков:", error);
+            console.error('Ошибка загрузки танков:', error);
             myTanks.value = [];
             return [];
         }
+    }
+
+    async function fetchMyTanks() {
+        const crewmanId = userStore.userInfo.crewman_id;
+        if (!crewmanId) {
+            myTanks.value = [];
+            return [];
+        }
+        return await fetchTanks({ owner__id: crewmanId });
+    }
+
+    async function fetchTanksByUser(userId) {
+        return await fetchTanks({ owner__id: userId });
     }
 
     async function createTank(data) {
@@ -173,27 +183,18 @@ export const useTanksStore = defineStore("tanksStore", () => {
         const battleId = response.data.id;
         const battleDuration = response.data.battle_duration || 5;
         
-        return new Promise((resolve, reject) => {
-            const interval = setInterval(async () => {
-                try {
-                    const res = await axios.get(`/api/battles/${battleId}/result/`);
-                    if (res.data.result !== 'pending') {
-                        clearInterval(interval);
-                        await fetchMyTanks();
-                        await fetchBattles();
-                        resolve(res.data);
-                    }
-                } catch (err) {
-                    clearInterval(interval);
-                    reject(err);
-                }
-            }, 1000);
-            
-            setTimeout(() => {
-                clearInterval(interval);
-                reject(new Error('Бой не завершился вовремя'));
-            }, (battleDuration + 5) * 1000);
-        });
+        return {
+            battleId: battleId,
+            battleDuration: battleDuration,
+            ...response.data
+        };
+    }
+
+    async function claimBattle(battleId) {
+        const response = await axios.post(`/api/battles/${battleId}/claim/`);
+        await fetchMyTanks();
+        await fetchBattles();
+        return response.data;
     }
 
     async function getBattleRemainingTime(battleId) {
@@ -224,6 +225,14 @@ export const useTanksStore = defineStore("tanksStore", () => {
         return nations.value.find(n => n.id === nationId);
     }
 
+    function resetStore() {
+        myTanks.value = [];
+        levels.value = [];
+        nations.value = [];
+        battles.value = [];
+        allCrewmen.value = [];
+    }
+
     return {
         myTanks,
         levels,
@@ -231,6 +240,8 @@ export const useTanksStore = defineStore("tanksStore", () => {
         battles,
         allCrewmen,
         fetchMyTanks,
+        fetchTanks,
+        fetchTanksByUser,
         createTank,
         upgradeTank,
         sellTank,
@@ -248,5 +259,7 @@ export const useTanksStore = defineStore("tanksStore", () => {
         getNationInfo,
         getBattleRemainingTime,
         fetchBattlesByUser,
+        claimBattle,
+        resetStore,
     };
 });

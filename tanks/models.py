@@ -26,7 +26,6 @@ class Level(models.Model):
 
     @property
     def creation_cost(self):
-        """Стоимость создания танка этого уровня"""
         if not self.level_number:
             return 0
         n = self.level_number
@@ -34,7 +33,6 @@ class Level(models.Model):
 
     @property
     def upgrade_to_next_cost(self):
-        """Стоимость повышения с этого уровня на следующий"""
         if not self.level_number:
             return None
         next_level = Level.objects.filter(level_number=self.level_number + 1).first()
@@ -43,16 +41,7 @@ class Level(models.Model):
         return None
 
     @property
-    def upgrade_cost(self):
-        """Стоимость улучшения до следующего уровня (половина стоимости создания следующего уровня)"""
-        next_level = Level.objects.filter(level_number=self.level_number + 1).first()
-        if next_level:
-            return next_level.creation_cost // 2
-        return None
-
-    @property
     def battle_reward(self):
-        """Награда за бой на этом уровне"""
         if not self.level_number:
             return 0
         return (100 + 25 * self.level_number) * self.level_number
@@ -115,7 +104,7 @@ class Tank(models.Model):
     def upgrade_cost(self):
         next_level = Level.objects.filter(level_number=self.level.level_number + 1).first()
         if next_level:
-            return next_level.upgrade_cost
+            return next_level.upgrade_to_next_cost
         return None
 
     def can_upgrade(self):

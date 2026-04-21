@@ -1,5 +1,5 @@
 <script setup>
-import { onBeforeMount, ref, watch, inject, onUnmounted } from 'vue';
+import { onBeforeMount, ref, watch, inject, onUnmounted, computed } from 'vue';
 import axios from 'axios';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
@@ -11,29 +11,104 @@ const tanksStore = useTanksStore();
 const openImageViewer = inject('openImageViewer');
 
 const { userInfo } = storeToRefs(userStore);
-const { myTanks, levels } = storeToRefs(tanksStore);
+const { myTanks, levels, battles } = storeToRefs(tanksStore); // +++ добавили battles
 
 const selectedTankId = ref(null);
 const selectedBattleLevelId = ref(null);
 const availableLevels = ref([]);
 const isProcessing = ref(false);
 
-// Состояние боев (хранится локально)
-const activeBattles = ref({}); // { tankId: { remaining, total, battleId, intervalId } }
-const pendingResults = ref({}); // { tankId: { result, reward } }
+// Состояние боев (будем синхронизировать с battles из стора)
+const activeBattles = ref({});      // { tankId: { remaining, total, battleId, intervalId } }
+const pendingResults = ref({});     // { tankId: { battleId } }
 
 // Модалка результата
 const showResultModalFlag = ref(false);
 const currentBattleResult = ref(null);
 
+// +++ Вспомогательная функция: получить бой по танку
+function getBattleByTank(tankId) {
+    return battles.value.find(b => b.tank === tankId && b.result === 'pending');
+}
+
+// +++ Восстановление состояния из стора при загрузке
+async function restoreBattlesState() {
+    // Очищаем текущие таймеры
+    Object.values(activeBattles.value).forEach(battle => {
+        if (battle.intervalId) clearInterval(battle.intervalId);
+    });
+    activeBattles.value = {};
+    pendingResults.value = {};
+
+    // Проходим по всем танкам
+    for (const tank of myTanks.value) {
+        const battle = getBattleByTank(tank.id);
+        if (!battle) continue;
+
+        // Проверяем, завершился ли уже бой по времени
+        const tankLevel = tanksStore.getLevelInfo(tank.level);
+        const duration = tankLevel?.level_number || 5;
+        const startedAt = new Date(battle.started_at);
+        const now = new Date();
+        const elapsed = (now - startedAt) / 1000;
+        
+        if (elapsed >= duration) {
+            // Бой завершился, но результат ещё не забран
+            pendingResults.value[tank.id] = { battleId: battle.id };
+        } else {
+            // Бой ещё идёт, запускаем таймер
+            const remaining = Math.ceil(duration - elapsed);
+            const intervalId = setInterval(() => {
+                if (activeBattles.value[tank.id]) {
+                    const newRemaining = activeBattles.value[tank.id].remaining - 1;
+                    if (newRemaining <= 0) {
+                        clearInterval(intervalId);
+                        delete activeBattles.value[tank.id];
+                        pendingResults.value[tank.id] = { battleId: battle.id };
+                        tanksStore.fetchMyTanks();
+                    } else {
+                        activeBattles.value[tank.id].remaining = newRemaining;
+                    }
+                }
+            }, 1000);
+            
+            activeBattles.value[tank.id] = {
+                remaining: remaining,
+                total: duration,
+                battleId: battle.id,
+                intervalId: intervalId
+            };
+        }
+    }
+}
+
+// Вычисляемое свойство: выбранный танк в бою?
+const isSelectedTankInBattle = computed(() => {
+    if (!selectedTankId.value) return false;
+    const tank = myTanks.value.find(t => t.id === selectedTankId.value);
+    if (!tank) return false;
+    return tank.is_in_battle || !!activeBattles.value[selectedTankId.value];
+});
+
+const selectedTankRemainingTime = computed(() => {
+    if (!selectedTankId.value) return null;
+    const battle = activeBattles.value[selectedTankId.value];
+    return battle ? battle.remaining : null;
+});
+
 // Функция начала боя
 async function startBattle() {
-    if (!selectedTankId.value || !selectedBattleLevelId.value) return;
+    if (!selectedTankId.value || !selectedBattleLevelId.value) {
+        showError('Ошибка', 'Выберите танк и уровень боя');
+        return;
+    }
+    if (isSelectedTankInBattle.value) {
+        showError('Ошибка', 'Этот танк уже участвует в бою! Дождитесь окончания.');
+        return;
+    }
     
     const tankId = selectedTankId.value;
     const battleLevelId = selectedBattleLevelId.value;
-    
-    // Находим уровень танка для длительности
     const tank = myTanks.value.find(t => t.id === tankId);
     const tankLevel = tanksStore.getLevelInfo(tank.level);
     const duration = tankLevel?.level_number || 5;
@@ -41,46 +116,34 @@ async function startBattle() {
     isProcessing.value = true;
     
     try {
-        const response = await axios.post("/api/battles/start/", {
-            tank_id: tankId,
-            battle_level_id: battleLevelId
-        });
+        const result = await tanksStore.startBattle(tankId, battleLevelId);
         
-        const battleId = response.data.id;
-        
-        // Создаем локальный таймер для этого танка
         let remaining = duration;
-        
-        const intervalId = setInterval(() => {
+        const timerId = setInterval(() => {
             remaining--;
             if (activeBattles.value[tankId]) {
                 activeBattles.value[tankId].remaining = remaining;
             }
-            
             if (remaining <= 0) {
-                clearInterval(intervalId);
-                // Бой закончился, ждем нажатия кнопки "Забрать"
-                pendingResults.value[tankId] = {
-                    battleId: battleId,
-                    ready: true
-                };
-                // Удаляем активный бой
-                delete activeBattles.value[tankId];
-                // Обновляем список танков асинхронно
-                tanksStore.fetchMyTanks();
+                clearInterval(timerId);
+                if (activeBattles.value[tankId]) {
+                    const battleId = activeBattles.value[tankId].battleId;
+                    delete activeBattles.value[tankId];
+                    pendingResults.value[tankId] = { battleId };
+                    tanksStore.fetchMyTanks();
+                }
             }
         }, 1000);
         
         activeBattles.value[tankId] = {
             remaining: duration,
             total: duration,
-            battleId: battleId,
-            intervalId: intervalId
+            battleId: result.battleId,
+            intervalId: timerId
         };
         
-        // Обновляем список танков
         await tanksStore.fetchMyTanks();
-        
+        await tanksStore.fetchBattles(); // +++ обновляем список боёв в сторе
         showSuccess('Бой начался!', 'Танк отправлен в бой');
         
     } catch (error) {
@@ -90,7 +153,23 @@ async function startBattle() {
     }
 }
 
-// Функция отмены боя
+async function claimReward(tankId) {
+    const pending = pendingResults.value[tankId];
+    if (!pending) return;
+    
+    try {
+        const result = await tanksStore.claimBattle(pending.battleId);
+        showResultModal(result);
+        delete pendingResults.value[tankId];
+        await tanksStore.fetchMyTanks();
+        await tanksStore.fetchBattles();
+        // +++ после получения награды обновляем состояние
+        await restoreBattlesState();
+    } catch (error) {
+        showError('Ошибка', error.response?.data?.error || 'Не удалось получить результат боя');
+    }
+}
+
 async function cancelBattle(tankId) {
     const battle = activeBattles.value[tankId];
     if (!battle) return;
@@ -101,34 +180,12 @@ async function cancelBattle(tankId) {
         await axios.post(`/api/battles/${battle.battleId}/cancel/`);
         delete activeBattles.value[tankId];
         await tanksStore.fetchMyTanks();
+        await tanksStore.fetchBattles();
         showSuccess('Бой отменён', 'Танк вернулся в ангар');
     } catch (error) {
         showError('Ошибка', 'Не удалось отменить бой');
-        // Восстанавливаем таймер если ошибка
-        if (battle.intervalId) {
-            // Перезапускаем таймер?
-        }
-    }
-}
-
-async function claimReward(tankId) {
-    const pending = pendingResults.value[tankId];
-    if (!pending) return;
-    
-    try {
-        // Получаем финальный результат с сервера
-        const response = await axios.get(`/api/battles/${pending.battleId}/result/`);
-        const result = response.data;
-        
-        // Показываем модалку с результатом
-        showResultModal(result);
-        
-        delete pendingResults.value[tankId];
         await tanksStore.fetchMyTanks();
-        await tanksStore.fetchBattles();
-        
-    } catch (error) {
-        showError('Ошибка', 'Не удалось получить результат боя');
+        delete activeBattles.value[tankId];
     }
 }
 
@@ -178,7 +235,6 @@ function getWinChance(tankId, battleLevelId) {
 
 function repeatBattle() {
     showResultModalFlag.value = false;
-    
     if (selectedTankId.value && selectedBattleLevelId.value) {
         startBattle();
     }
@@ -189,9 +245,16 @@ watch(selectedTankId, () => {
     updateAvailableLevels();
 });
 
+// +++ При изменении списка танков или боёв пересоздаём состояние
+watch([myTanks, battles], async () => {
+    await restoreBattlesState();
+}, { deep: true });
+
 onBeforeMount(async () => {
     await tanksStore.fetchMyTanks();
     await tanksStore.fetchLevels();
+    await tanksStore.fetchBattles(); // +++ загружаем бои
+    await restoreBattlesState();     // +++ восстанавливаем таймеры и кнопки
 });
 </script>
 
@@ -220,8 +283,11 @@ onBeforeMount(async () => {
                                             {{ tank.is_in_battle || activeBattles[tank.id] ? '- В БОЮ' : '' }}
                                         </option>
                                     </select>
+                                    <small v-if="selectedTankId && isSelectedTankInBattle" class="text-warning">
+                                        ⚠️ Этот танк уже в бою! (осталось {{ selectedTankRemainingTime }} сек)
+                                    </small>
                                 </div>
-                                <div class="form-group" v-if="selectedTankId">
+                                <div class="form-group" v-if="selectedTankId && !isSelectedTankInBattle">
                                     <label>Выберите уровень сражения</label>
                                     <select class="custom-form-select" v-model="selectedBattleLevelId" required>
                                         <option :value="null" disabled>Выберите уровень</option>
@@ -231,10 +297,11 @@ onBeforeMount(async () => {
                                         </option>
                                     </select>
                                 </div>
-                                <div v-if="selectedTankId && selectedBattleLevelId" class="alert-custom-info">
+                                <div v-if="selectedTankId && selectedBattleLevelId && !isSelectedTankInBattle" class="alert-custom-info">
                                     <strong>Шанс победы:</strong> {{ getWinChance(selectedTankId, selectedBattleLevelId) }}%
                                 </div>
-                                <button type="submit" class="btn-custom-danger w-100" :disabled="isProcessing">
+                                <button type="submit" class="btn-custom-danger w-100" 
+                                        :disabled="isProcessing || !selectedTankId || !selectedBattleLevelId || isSelectedTankInBattle">
                                     {{ isProcessing ? 'Отправка...' : 'Начать бой!' }}
                                 </button>
                             </form>
@@ -309,7 +376,6 @@ onBeforeMount(async () => {
                     <p><strong>Получено кредитов:</strong> {{ currentBattleResult.reward_earned }} 💰</p>
                 </div>
                 <div class="custom-modal-footer">
-                    <!-- Добавлена кнопка "Повтор" -->
                     <button class="btn-custom-warning" @click="repeatBattle">Повтор</button>
                     <button class="btn-custom-primary" @click="closeResultModal">Закрыть</button>
                 </div>

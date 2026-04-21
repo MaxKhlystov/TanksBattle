@@ -11,10 +11,7 @@ from rest_framework.viewsets import GenericViewSet
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 import pyotp
-import random
 import io
-import time
-import threading  # для асинхронной обработки
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 from django.http import HttpResponse
@@ -129,6 +126,9 @@ class LevelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
         # Находим все танки этого уровня
         tanks = Tank.objects.filter(level=level)
         
+        # 👇 Вычисляем сумму возврата ДО удаления танков
+        total_refund = sum(tank.level.creation_cost for tank in tanks)
+        
         # Для каждого танка возвращаем полную стоимость владельцу
         for tank in tanks:
             if tank.is_in_battle:
@@ -140,6 +140,7 @@ class LevelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
                     battle.finished_at = timezone.now()
                     battle.save()
                 tank.is_in_battle = False
+                tank.save()   # 👈 обязательно сохраняем
             
             # Возвращаем полную стоимость создания
             tank.owner.credits += tank.level.creation_cost
@@ -149,7 +150,7 @@ class LevelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
         # Удаляем уровень
         level.delete()
         
-        return Response({'success': True, 'message': f'Уровень {level.level_number} удалён. Возвращено кредитов: {sum(t.level.creation_cost for t in tanks)}'})
+        return Response({'success': True, 'message': f'Уровень {level.level_number} удалён. Возвращено кредитов: {total_refund}'})
 
 # ---------------------- Crewman ----------------------
 class CrewmanViewSet(viewsets.GenericViewSet):
@@ -257,13 +258,12 @@ class TankViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Updat
     filterset_fields = ['owner__user__username', 'owner__id', 'nation__name', 'level__level_number', 'is_in_battle']
 
     def get_queryset(self):
-        if self.request.user.is_superuser:
-            return Tank.objects.all()
-        try:
-            crewman = Crewman.objects.get(user=self.request.user)
-            return Tank.objects.filter(owner=crewman)
-        except Crewman.DoesNotExist:
-            return Tank.objects.none() 
+        qs = Tank.objects.select_related('owner__user', 'nation', 'level')
+        user = self.request.user
+        if not user.is_superuser or not cache.get(f'2fa_{user.id}', False):
+            crewman, _ = Crewman.objects.get_or_create(user=user)
+            return qs.filter(owner=crewman)
+        return qs.all()
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -299,7 +299,7 @@ class TankViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Updat
         if not all([name, nation_id, level_id]):
             return Response({'error': 'Missing fields'}, status=status.HTTP_400_BAD_REQUEST)
         
-        crewman = Crewman.objects.get(user=self.request.user)
+        crewman, created = Crewman.objects.get_or_create(user=self.request.user)
         if crewman.available_garage_slots() <= 0:
             return Response({'error': 'No free garage slots'}, status=status.HTTP_400_BAD_REQUEST)
         
@@ -450,7 +450,7 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
     filterset_fields = ['result', 'battle_level__level_number', 'tank__name']
 
     def get_queryset(self):
-        crewman = Crewman.objects.get(user=self.request.user)
+        crewman, created = Crewman.objects.get_or_create(user=self.request.user)
         if self.request.user.is_superuser:
             return BattleRecord.objects.all().order_by('-started_at')
         return BattleRecord.objects.filter(crewman=crewman).order_by('-started_at')
@@ -459,10 +459,12 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
     def start_battle(self, request):
         tank_id = request.data.get('tank_id')
         battle_level_id = request.data.get('battle_level_id')
+        
         if not tank_id or not battle_level_id:
             return Response({'error': 'tank_id and battle_level_id required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        crewman = Crewman.objects.get(user=self.request.user)
+        crewman, _ = Crewman.objects.get_or_create(user=self.request.user)
+        
         try:
             tank = Tank.objects.get(id=tank_id, owner=crewman)
             battle_level = Level.objects.get(id=battle_level_id)
@@ -476,46 +478,22 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
         if battle_level.level_number not in [tank_lvl - 1, tank_lvl, tank_lvl + 1]:
             return Response({'error': 'Battle level not available for this tank'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Расчет шанса победы
-        if battle_level.level_number < tank_lvl:
-            win_chance = 100
-        elif battle_level.level_number == tank_lvl:
-            win_chance = 75
-        else:
-            win_chance = 25
-        
-        # Длительность боя = уровень танка * 1 секунда
-        battle_duration = tank_lvl  # секунд
-        
-        # Создаем запись о бое
+        # Создаём запись о бое со статусом 'pending'
         battle_record = BattleRecord.objects.create(
             tank=tank,
             crewman=crewman,
             battle_level=battle_level,
-            result='pending'
+            result='pending',
+            reward_earned=0
         )
         tank.is_in_battle = True
         tank.save()
         
-        # Запускаем обработку боя в отдельном потоке (асинхронно)
-        def process_battle():
-            time.sleep(battle_duration)
-            # Небольшая пауза перед завершением
-            r = random.randint(1, 100)
-            is_victory = (r <= win_chance)
-            # Обновляем запись в БД
-            battle_record.refresh_from_db()
-            if battle_record.result == 'pending':  # Проверяем, что бой еще не завершен
-                battle_record.process_battle_result(is_victory)
-        
-        thread = threading.Thread(target=process_battle)
-        thread.daemon = True
-        thread.start()
-        
+        # Убираем поток и кэш – больше не нужны
         serializer = BattleRecordSerializer(battle_record)
         return Response({
             'id': battle_record.id,
-            'battle_duration': battle_duration,
+            'battle_duration': tank_lvl,  # длительность в секундах
             **serializer.data
         }, status=status.HTTP_201_CREATED)
         
@@ -525,11 +503,10 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
         if battle.result != 'pending':
             return Response({'remaining': 0, 'finished': True, 'result': battle.result})
         
-        # Рассчитываем оставшееся время
         from django.utils import timezone
         elapsed = (timezone.now() - battle.started_at).total_seconds()
         tank_level = battle.tank.level.level_number
-        total_duration = tank_level  # секунд
+        total_duration = tank_level
         remaining = max(0, total_duration - elapsed)
         
         return Response({
@@ -537,7 +514,47 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
             'finished': False,
             'total_duration': total_duration
         })
-
+        
+    @action(detail=True, methods=['POST'], url_path='claim')
+    def claim_battle(self, request, pk=None):
+        battle = self.get_object()
+        
+        if battle.result != 'pending':
+            return Response({'error': 'Бой уже завершён'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        from django.utils import timezone
+        elapsed = (timezone.now() - battle.started_at).total_seconds()
+        tank_level = battle.tank.level.level_number
+        required_duration = tank_level  # секунд
+        
+        if elapsed < required_duration:
+            remaining = int(required_duration - elapsed)
+            return Response({
+                'error': f'Бой ещё не закончился. Осталось {remaining} секунд.',
+                'remaining': remaining
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Вычисляем шанс победы (как в start_battle)
+        tank_lvl = battle.tank.level.level_number
+        battle_lvl = battle.battle_level.level_number
+        
+        if battle_lvl < tank_lvl:
+            win_chance = 100
+        elif battle_lvl == tank_lvl:
+            win_chance = 75
+        else:
+            win_chance = 25
+        
+        # Определяем результат
+        import random
+        is_victory = random.randint(1, 100) <= win_chance
+        
+        # Обрабатываем результат (метод process_battle_result уже есть в модели)
+        battle.process_battle_result(is_victory)
+        
+        serializer = BattleRecordSerializer(battle)
+        return Response(serializer.data)
+    
     @action(detail=True, methods=['GET'], url_path='result')
     def battle_result(self, request, pk=None):
         battle = self.get_object()
@@ -547,7 +564,7 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
     # Статистика по боям
     @action(detail=False, methods=['GET'], url_path='stats')
     def battle_stats(self, request):
-        crewman = Crewman.objects.get(user=self.request.user)
+        crewman, created = Crewman.objects.get_or_create(user=self.request.user)
         if self.request.user.is_superuser:
             queryset = BattleRecord.objects.all()
         else:
@@ -596,13 +613,14 @@ class UserViewSet(viewsets.GenericViewSet):
             'username': request.user.username if request.user.is_authenticated else None,
             'is_authenticated': request.user.is_authenticated,
             'is_staff': request.user.is_staff,
+            'crewman_id': None,   # по умолчанию
         }
         if request.user.is_authenticated:
-            crewman = Crewman.objects.filter(user=request.user).first()
-            if crewman:
-                data['credits'] = crewman.credits
-                data['garage_slots'] = crewman.garage_slots
-                data['second'] = cache.get(f'2fa_{request.user.id}', False)
+            crewman, created = Crewman.objects.get_or_create(user=request.user)
+            data['credits'] = crewman.credits
+            data['garage_slots'] = crewman.garage_slots
+            data['second'] = cache.get(f'2fa_{request.user.id}', False)
+            data['crewman_id'] = crewman.id
         return Response(data)
 
     @method_decorator(csrf_exempt)

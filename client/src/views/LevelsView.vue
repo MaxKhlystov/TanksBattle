@@ -39,10 +39,10 @@ async function createLevel() {
     }
     
     try {
-        await tanksStore.createLevel({ level_number: newLevelNumber.value });
+        const createdLevelNumber = newLevelNumber.value;
+        await tanksStore.createLevel({ level_number: createdLevelNumber });
         newLevelNumber.value = null;
-        levelError.value = '';
-        showSuccess('Уровень создан', `Уровень ${newLevelNumber.value} успешно создан`);
+        showSuccess('Уровень создан', `Уровень ${createdLevelNumber} успешно создан`);
     } catch (err) {
         levelError.value = err.response?.data?.level_number?.[0] || 'Ошибка создания уровня';
         showError('Ошибка', levelError.value);

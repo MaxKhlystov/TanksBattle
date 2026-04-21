@@ -9,7 +9,8 @@ export const useUserStore = defineStore("userStore", () => {
         is_staff: false,
         credits: 0,
         garage_slots: 3,
-        second: false
+        second: false,
+        crewman_id: null
     });
     
     async function checkLogin() {

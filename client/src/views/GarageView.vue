@@ -84,34 +84,22 @@ watch(selectedUserId, (newVal) => {
     }
 });
 
-async function loadTanks() {
-    console.log("=== loadTanks START ===");
-    console.log("selectedUserId.value:", selectedUserId.value);
-    console.log("userInfo.value.is_staff:", userInfo.value.is_staff);
-    console.log("userInfo.value.second:", userInfo.value.second);
-    
-    if (selectedUserId.value && userInfo.value.is_staff && userInfo.value.second) {
-        console.log("Loading tanks for user ID:", selectedUserId.value);
-        const url = `/api/tanks/?owner__id=${selectedUserId.value}`;
-        console.log("Request URL:", url);
-        const response = await axios.get(url);
-        console.log("Response data:", response.data);
-        console.log("Response data length:", response.data.length);
-        myTanks.value = response.data;
-        
-        // Загружаем данные пользователя (кредиты и слоты) из allCrewmen
-        const selectedUser = allCrewmen.value.find(c => c.id === selectedUserId.value);
-        if (selectedUser) {
-            selectedUserData.value = selectedUser;
-            console.log("Selected user data:", selectedUserData.value);
-        }
-    } else {
-        console.log("Loading my own tanks");
-        await fetchMyTanks();
-        selectedUserData.value = null; // сбрасываем при просмотре своего ангара
-        console.log("myTanks.value after fetchMyTanks:", myTanks.value);
+// Добавь это в существующий script setup
+watch(() => userInfo.value.is_authenticated, async (newVal, oldVal) => {
+    if (newVal === true && oldVal === false) {
+        await loadAllData();
     }
-    console.log("=== loadTanks END ===");
+});
+
+async function loadTanks() {
+    if (selectedUserId.value && userInfo.value.is_staff && userInfo.value.second) {
+        await tanksStore.fetchTanksByUser(selectedUserId.value);
+        const selectedUser = allCrewmen.value.find(c => c.id === selectedUserId.value);
+        selectedUserData.value = selectedUser || null;
+    } else {
+        await tanksStore.fetchMyTanks();
+        selectedUserData.value = null;
+    }
 }
 
 // Применение фильтров
@@ -329,27 +317,12 @@ async function saveEdit() {
     showSuccess('Сохранено!', 'Танк обновлён');
 }
 
-async function exportToExcel() {
-    try {
-        let url = '/api/tanks/export-excel/';
-        if (selectedUserId.value && userInfo.value.is_staff && userInfo.value.second) {
-            url += `?owner__id=${selectedUserId.value}`;
-        }
-        const response = await axios.get(url, { responseType: 'blob' });
-        const blob = new Blob([response.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-        const link = document.createElement('a');
-        const objectUrl = URL.createObjectURL(blob);
-        link.href = objectUrl;
-        link.setAttribute('download', 'tanks.xlsx');
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(objectUrl);
-    } catch (error) {
-        console.error('Ошибка экспорта:', error);
-        showError('Ошибка', 'Не удалось скачать файл');
+async function refreshCrewmenList() {
+    if (userInfo.value.is_staff && userInfo.value.second) {
+        await tanksStore.fetchAllCrewmen();
     }
 }
+
 </script>
 
 <template>
@@ -363,7 +336,7 @@ async function exportToExcel() {
                 <!-- Выбор пользователя -->
                 <div v-if="userInfo.is_staff && userInfo.second" class="mb-3">
                     <label class="text-white">Посмотреть ангар пользователя:</label>
-                    <select class="custom-form-select" v-model="selectedUserId">
+                    <select class="custom-form-select" v-model="selectedUserId" @focus="refreshCrewmenList">
                         <option :value="null">-- Мой ангар --</option>
                         <option v-for="c in allCrewmen" :key="c.id" :value="c.id">
                             {{ c.username }} (танков: {{ c.tanks_count }})

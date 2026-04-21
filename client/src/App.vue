@@ -54,14 +54,15 @@ async function verify2FA() {
     try {
         await axios.post('/api/user/second-login/', { key: twoFACode.value });
         await userStore.checkLogin();
-        show2FAModal.value = false;
         twoFACode.value = '';
         showSuccess('2FA активирована', 'Двухфакторная аутентификация успешно включена');
     } catch (error) {
         showError('Ошибка', 'Неверный код');
     }
+    show2FAModal.value = false;
 }
 
+// В handleLogin после успешного входа
 async function handleLogin() {
     loginError.value = '';
     try {
@@ -70,6 +71,20 @@ async function handleLogin() {
             showLoginModal.value = false;
             loginUsername.value = '';
             loginPassword.value = '';
+            
+            // 👇 Принудительно обновляем данные ангара и пользователя
+            await tanksStore.fetchMyTanks();
+            await tanksStore.fetchLevels();
+            await tanksStore.fetchNations();
+            await tanksStore.fetchBattles();
+            if (userInfo.value.is_staff && userInfo.value.second) {
+                await tanksStore.fetchAllCrewmen();
+            }
+            // Обновляем CSRF-токен (см. пункт 15)
+            const csrfToken = Cookies.get("csrftoken");
+            if (csrfToken) {
+                axios.defaults.headers.common['X-CSRFToken'] = csrfToken;
+            }
         }
     } catch (error) {
         loginError.value = 'Неверное имя пользователя или пароль';
@@ -100,9 +115,20 @@ async function handleRegister() {
     }
 }
 
+// В handleLogout убираем лишнее и вызываем сброс стора
 async function handleLogout() {
+    try {
+        await axios.post('/api/user/logout-2fa/');
+    } catch (error) {
+        console.error('Error resetting 2FA:', error);
+    }
     await userStore.logout();
+    tanksStore.resetStore();           // очищаем все данные
+    sessionStorage.removeItem('selectedUserId');
     showDropdown.value = false;
+    // 👇 Принудительно переходим на главную и обновляем состояние
+    await router.push('/');
+    // Не делаем перезагрузку страницы, чтобы сохранить SPA-поведение
 }
 
 onBeforeMount(async () => {
@@ -275,7 +301,7 @@ onBeforeMount(async () => {
                 </div>
                 <div class="custom-modal-footer">
                     <button class="btn-custom-secondary" @click="show2FAModal = false">Отмена</button>
-                    <button class="btn-custom-warning" @click="verify2FA">Активировать</button>
+                    <button class="btn-custom-warning" @click="verify2FA", "show2FAModal = false>Активировать</button>
                 </div>
             </div>
         </div>
