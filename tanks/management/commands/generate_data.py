@@ -23,7 +23,6 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS('Starting data generation...'))
 
-        # 1. Создание наций (если их нет)
         nations_data = [
             'СССР', 'Германия', 'США', 'Франция', 'Великобритания',
             'Япония', 'Китай', 'Швеция', 'Италия', 'Польша'
@@ -33,13 +32,11 @@ class Command(BaseCommand):
         nations = list(Nation.objects.all())
         self.stdout.write(f'✓ Nations: {len(nations)}')
 
-        # 2. Создание уровней (1-15)
         for i in range(1, 16):
             Level.objects.get_or_create(level_number=i)
         levels = list(Level.objects.all())
         self.stdout.write(f'✓ Levels: {len(levels)}')
 
-        # 3. Создание пользователей (обычных, не staff)
         self.stdout.write(f'Creating {users_count} regular users...')
         crewmen_list = []
         existing_usernames = set(User.objects.values_list('username', flat=True))
@@ -66,8 +63,7 @@ class Command(BaseCommand):
                 self.stdout.write(f'  Created {i+1} users...')
 
         self.stdout.write(self.style.SUCCESS(f'✓ Created {len(crewmen_list)} crewmen'))
-
-        # 4. Создание танков (распределение случайное)
+        
         self.stdout.write(f'Creating {tanks_total} tanks...')
         tank_names_pool = [
             'Т-34', 'КВ-1', 'ИС-2', 'Т-54', 'Т-62', 'Т-72', 'Т-90',
@@ -99,7 +95,6 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(f'✓ Created {tanks_created} tanks'))
 
-        # 5. Создание боёв
         self.stdout.write(f'Creating {battles_total} battle records...')
         all_tanks = list(Tank.objects.all())
         battles_created = 0
@@ -128,7 +123,6 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(f'✓ Created {battles_created} battle records'))
 
-        # Итоговая статистика
         self.stdout.write(self.style.SUCCESS('\n' + '='*50))
         self.stdout.write(self.style.SUCCESS('DATA GENERATION COMPLETED!'))
         self.stdout.write('='*50)

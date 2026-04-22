@@ -13,7 +13,6 @@ const { battles, myTanks, levels } = storeToRefs(tanksStore);
 const filterResult = ref('all');
 const filteredBattles = ref([]);
 
-// Вычисляемые свойства для статистики
 const totalWins = computed(() => {
     return battles.value.filter(b => b.result === 'victory').length;
 });
@@ -83,7 +82,6 @@ watch([battles, filterResult], () => applyFilters(), { deep: true, immediate: tr
 <template>
     <div class="custom-container">
         <div v-if="userInfo && userInfo.is_authenticated">
-            <!-- Статистика -->
             <div class="row mb-4">
                 <div class="col-md-3">
                     <div class="custom-card bg-primary text-white text-center">
@@ -119,7 +117,6 @@ watch([battles, filterResult], () => applyFilters(), { deep: true, immediate: tr
                 </div>
             </div>
 
-            <!-- Фильтр -->
             <div class="custom-card mb-3">
                 <div class="custom-card-body">
                     <div class="form-group">
@@ -133,7 +130,6 @@ watch([battles, filterResult], () => applyFilters(), { deep: true, immediate: tr
                 </div>
             </div>
 
-            <!-- Список боёв -->
             <div class="custom-card">
                 <div class="custom-card-header bg-danger">История боёв</div>
                 <div class="custom-card-body">

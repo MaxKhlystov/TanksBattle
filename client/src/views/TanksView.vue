@@ -140,7 +140,6 @@ async function onCreateTank() {
         <div v-else class="alert-custom-warning">Пожалуйста, авторизуйтесь</div>
     </div>
 
-    <!-- Модалка ошибки -->
     <div v-if="showErrorModal" class="modal-overlay">
         <div class="modal-dialog-custom">
             <div class="custom-modal-content">

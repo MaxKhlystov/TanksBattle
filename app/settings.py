@@ -82,7 +82,6 @@ CSRF_TRUSTED_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
 
-# Кэш для 2FA (используем локальный memory cache)
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
@@ -104,12 +103,10 @@ LOGGING = {
     },
 }
 
-# Дополнительные настройки для CSRF и CORS
 CSRF_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_HTTPONLY = False
-CSRF_COOKIE_SECURE = False  # True только если используете HTTPS
+CSRF_COOKIE_SECURE = False  
 
-# Для разработки можно добавить
 if DEBUG:
     CSRF_TRUSTED_ORIGINS = [
         'http://localhost:5173',

@@ -74,7 +74,6 @@ onBeforeMount(() => {
             </div>
 
             <div v-else>
-                <!-- Статистика танков -->
                 <div class="custom-card mb-4" v-if="tankStats">
                     <div class="custom-card-header bg-primary">Статистика танков</div>
                     <div class="custom-card-body">
@@ -102,7 +101,6 @@ onBeforeMount(() => {
                     </div>
                 </div>
 
-                <!-- Статистика боёв -->
                 <div class="custom-card mb-4" v-if="battleStats">
                     <div class="custom-card-header bg-success">Статистика боёв</div>
                     <div class="custom-card-body">
@@ -130,7 +128,6 @@ onBeforeMount(() => {
                     </div>
                 </div>
 
-                <!-- Статистика наций -->
                 <div class="custom-card mb-4" v-if="nationStats">
                     <div class="custom-card-header bg-warning text-dark">Статистика наций</div>
                     <div class="custom-card-body">
@@ -155,7 +152,6 @@ onBeforeMount(() => {
                     </div>
                 </div>
 
-                <!-- Статистика уровней -->
                 <div class="custom-card mb-4" v-if="levelStats">
                     <div class="custom-card-header bg-info text-white">Статистика уровней</div>
                     <div class="custom-card-body">
@@ -201,20 +197,3 @@ onBeforeMount(() => {
         <div v-else class="alert-custom-warning">Доступ только для администраторов</div>
     </div>
 </template>
-
-<style scoped>
-.stats-title {
-    color: #ffffff !important;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
-}
-
-.progress {
-    height: 20px;
-    background-color: #e9ecef;
-    border-radius: 10px;
-    overflow: hidden;
-}
-.progress-bar {
-    transition: width 0.3s ease;
-}
-</style>

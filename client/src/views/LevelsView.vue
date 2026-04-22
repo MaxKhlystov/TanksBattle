@@ -145,10 +145,3 @@ const maxLevelNumber = computed(() => {
         <div v-else class="alert-custom-warning">Доступ только для администраторов</div>
     </div>
 </template>
-
-<style scoped>
-.action-buttons {
-    display: flex;
-    gap: 8px;
-}
-</style>

@@ -24,8 +24,6 @@ async function loadCrewmen() {
     } catch (error) {
         console.error('Ошибка загрузки пользователей:', error);
         message.value = 'Ошибка загрузки';
-    } finally {
-        loading.value = false;
     }
 }
 

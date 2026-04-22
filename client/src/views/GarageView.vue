@@ -10,13 +10,12 @@ import { showSuccess, showError } from '@/utils/notifications';
 const userStore = useUserStore();
 const tanksStore = useTanksStore();
 const openImageViewer = inject('openImageViewer');
-const selectedUserData = ref(null); // данные выбранного пользователя (кредиты, слоты)
+const selectedUserData = ref(null); 
 
 const { userInfo } = storeToRefs(userStore);
 const { myTanks, levels, nations, allCrewmen, battles } = storeToRefs(tanksStore);
 const { fetchAllCrewmen, fetchMyTanks, fetchLevels, fetchNations, upgradeTank, sellTank, fetchBattles } = tanksStore;
 
-// Локальное состояние
 const selectedTank = ref(null);
 const showUpgradeModal = ref(false);
 const showSellModal = ref(false);
@@ -30,16 +29,13 @@ const loading = ref(false);
 const filters = ref({ nation: null, level: null, is_in_battle: null });
 const selectedUserId = ref(null);
 
-// Таймеры для танков в бою
 const battleTimers = ref({});
 let timerInterval = null;
 
-// Функция обновления таймеров для всех танков в бою
 async function updateBattleTimers() {
     const tanksInBattle = myTanks.value?.filter(t => t.is_in_battle) || [];
     if (tanksInBattle.length === 0) return;
     
-    // Получаем активные бои
     await fetchBattles();
     const activeBattles = battles.value.filter(b => b.result === 'pending');
     
@@ -53,13 +49,11 @@ async function updateBattleTimers() {
                 battleId: activeBattle.id
             };
         } else if (tank.is_in_battle) {
-            // Если боя нет, но танк помечен как в бою - обновляем статус
             await fetchMyTanks();
         }
     }
 }
 
-// Запускаем интервал обновления таймеров
 function startTimerUpdates() {
     if (timerInterval) clearInterval(timerInterval);
     timerInterval = setInterval(() => {
@@ -69,13 +63,11 @@ function startTimerUpdates() {
     }, 1000);
 }
 
-// Форматирование времени
 function formatBattleTime(seconds) {
     if (seconds <= 0) return 'Завершается...';
     return `${seconds} сек`;
 }
 
-// Сохраняем selectedUserId в sessionStorage
 watch(selectedUserId, (newVal) => {
     if (newVal) {
         sessionStorage.setItem('selectedUserId', newVal);
@@ -84,7 +76,6 @@ watch(selectedUserId, (newVal) => {
     }
 });
 
-// Добавь это в существующий script setup
 watch(() => userInfo.value.is_authenticated, async (newVal, oldVal) => {
     if (newVal === true && oldVal === false) {
         await loadAllData();
@@ -102,7 +93,6 @@ async function loadTanks() {
     }
 }
 
-// Применение фильтров
 async function applyFilters() {
     let url = '/api/tanks/';
     const params = new URLSearchParams();
@@ -121,69 +111,41 @@ async function applyFilters() {
     }
 }
 
-// Наблюдатели
 watch(filters, () => applyFilters(), { deep: true });
 watch(selectedUserId, async (newVal, oldVal) => {
-    console.log("=== selectedUserId changed ===");
-    console.log("oldVal:", oldVal);
-    console.log("newVal:", newVal);
-    console.log("userInfo.value.is_staff:", userInfo.value.is_staff);
-    console.log("userInfo.value.second:", userInfo.value.second);
     await loadTanks();
     await applyFilters();
-    console.log("=== selectedUserId change processed ===");
 });
 
-// Единая функция загрузки всех данных
 async function loadAllData() {
-    console.log("loadAllData started");
     loading.value = true;
     try {
-        // 1. Обновляем информацию о пользователе
         await userStore.checkLogin();
-        console.log("User info loaded, credits:", userInfo.value.credits);
-
-        // 2. Загружаем танки
         await loadTanks();
-        console.log("Tanks loaded, count:", myTanks.value?.length || 0);
-        
-        // 3. Загружаем справочники
         if (!levels.value || levels.value.length === 0) {
             await fetchLevels();
         }
         if (!nations.value || nations.value.length === 0) {
             await fetchNations();
         }
-        
-        // 4. Загружаем бои для таймеров
         await fetchBattles();
-        
-        // 5. Для суперюзера с 2FA загружаем список пользователей
         if (userInfo.value.is_staff && userInfo.value.second && (!allCrewmen.value || allCrewmen.value.length === 0)) {
             await fetchAllCrewmen();
         }
-        
-        // 6. Запускаем обновление таймеров
         await updateBattleTimers();
         startTimerUpdates();
 
         
     } catch (error) {
         console.error('Ошибка загрузки данных:', error);
-    } finally {
-        loading.value = false;
-        console.log("loadAllData finished");
     }
 }
 
-// Восстанавливаем selectedUserId из sessionStorage
 onBeforeMount(() => {
     const savedUserId = sessionStorage.getItem('selectedUserId');
     if (savedUserId) {
         selectedUserId.value = parseInt(savedUserId);
     }
-    
-    // Устанавливаем CSRF
     axios.defaults.withCredentials = true;
     const csrfToken = Cookies.get("csrftoken");
     if (csrfToken) {
@@ -191,17 +153,14 @@ onBeforeMount(() => {
     }
 });
 
-// Останавливаем интервал при размонтировании
 onUnmounted(() => {
     if (timerInterval) clearInterval(timerInterval);
 });
 
-// Основная загрузка при монтировании
 onMounted(() => {
     loadAllData();
 });
 
-// Функции-помощники
 function getLevelNumber(levelId) {
     const level = tanksStore.getLevelInfo(levelId);
     return level ? level.level_number : '?';
@@ -213,22 +172,11 @@ function getNationName(nationId) {
 }
 
 function getUpgradeCost(tank) {
-    console.log("=== getUpgradeCost Debug ===");
-    console.log("Tank name:", tank.name);
-    console.log("Tank level_number:", tank.level_number);
-    console.log("All levels:", levels.value.map(l => ({level_number: l.level_number, upgrade_to_next_cost: l.upgrade_to_next_cost})));
-    
     const currentLevel = levels.value.find(l => l.level_number === tank.level_number);
-    console.log("Found currentLevel:", currentLevel);
-    
     if (!currentLevel) {
-        console.log("Current level not found!");
         return null;
     }
-    
     const cost = currentLevel.upgrade_to_next_cost;
-    console.log("Returning cost:", cost);
-    
     return cost || null;
 }
 
@@ -240,7 +188,6 @@ async function handleUpgrade(tank) {
 async function confirmUpgrade() {
     if (!selectedTank.value) return;
     
-    // Сразу закрываем модальное окно
     showUpgradeModal.value = false;
     const tank = selectedTank.value;
     selectedTank.value = null;
@@ -263,7 +210,6 @@ async function handleSell(tank) {
 async function confirmSell() {
     if (!selectedTank.value) return;
     
-    // Сразу закрываем модальное окно
     showSellModal.value = false;
     const tank = selectedTank.value;
     selectedTank.value = null;
@@ -333,7 +279,6 @@ async function refreshCrewmenList() {
             </div>
             
             <div v-else>
-                <!-- Выбор пользователя -->
                 <div v-if="userInfo.is_staff && userInfo.second" class="mb-3">
                     <label class="text-white">Посмотреть ангар пользователя:</label>
                     <select class="custom-form-select" v-model="selectedUserId" @focus="refreshCrewmenList">
@@ -344,7 +289,6 @@ async function refreshCrewmenList() {
                     </select>
                 </div>
 
-                <!-- Фильтры -->
                 <div class="row mb-3">
                     <div class="col-md-4">
                         <select class="custom-form-select" v-model="filters.nation">
@@ -367,7 +311,6 @@ async function refreshCrewmenList() {
                     </div>
                 </div>
 
-                <!-- Карточки с кредитами и ангаром -->
                 <div class="row mb-4">
                     <div class="col-md-6">
                         <div class="custom-card bg-primary text-white">
@@ -392,12 +335,10 @@ async function refreshCrewmenList() {
                     </div>
                 </div>
 
-                <!-- Заголовок и кнопка экспорта -->
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <h2 class="tanks-title">Мои танки</h2>
                 </div>
 
-                <!-- Список танков -->
                 <div class="row" v-if="myTanks && myTanks.length > 0">
                     <div class="col-md-4" v-for="tank in myTanks" :key="tank.id">
                         <div class="tank-card" :class="{ 'opacity-50': tank.is_in_battle }">
@@ -456,7 +397,6 @@ async function refreshCrewmenList() {
         </div>
     </div>
 
-    <!-- Модалки -->
     <div v-if="showUpgradeModal" class="modal-overlay">
         <div class="modal-dialog-custom">
             <div class="custom-modal-content">
@@ -527,70 +467,3 @@ async function refreshCrewmenList() {
         </div>
     </div>
 </template>
-
-<style scoped>
-.tank-image {
-    width: 100%;
-    height: 180px;
-    overflow: hidden;
-    border-radius: 12px;
-    margin-bottom: 10px;
-    cursor: pointer;
-}
-
-.tank-img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.tank-image-placeholder {
-    width: 100%;
-    height: 180px;
-    background: linear-gradient(135deg, #2c2c2c, #1a1a1a);
-    border-radius: 12px;
-    margin-bottom: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 60px;
-    cursor: pointer;
-}
-
-.tanks-title {
-    color: #ffffff;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
-}
-
-.btn-action {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    border: none;
-    font-size: 18px;
-    cursor: pointer;
-    transition: transform 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.btn-action:hover {
-    transform: scale(1.05);
-}
-
-.btn-upgrade {
-    background-color: #ffc107;
-    color: #212529;
-}
-
-.btn-sell {
-    background-color: #dc3545;
-    color: white;
-}
-
-.btn-edit {
-    background-color: #007bff;
-    color: white;
-}
-</style>

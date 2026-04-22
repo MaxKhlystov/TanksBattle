@@ -1,3 +1,5 @@
+import pyotp
+import io
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -10,12 +12,9 @@ from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
-import pyotp
-import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 from django.http import HttpResponse
-
 from .models import Nation, Level, Crewman, Tank, BattleRecord
 from .serializers import (
     NationSerializer, LevelSerializer, CrewmanSerializer,
@@ -23,8 +22,6 @@ from .serializers import (
 )
 from .permissions import IsStaffAnd2FAVerified
 
-
-# ---------------------- Nation ----------------------
 class NationViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
                     mixins.CreateModelMixin, mixins.UpdateModelMixin,
                     mixins.DestroyModelMixin, GenericViewSet):
@@ -43,7 +40,6 @@ class NationViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
 
     @action(detail=False, methods=['GET'], url_path='stats')
     def nation_stats(self, request):
-        """Статистика по нациям"""
         stats = Nation.objects.annotate(
             tanks_count=Count('tanks')
         ).aggregate(
@@ -52,7 +48,6 @@ class NationViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
             avg_tanks_per_nation=Avg('tanks_count')
         )
         
-        # Самая популярная нация
         most_popular = Nation.objects.annotate(
             tanks_count=Count('tanks')
         ).order_by('-tanks_count').first()
@@ -60,14 +55,11 @@ class NationViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
         stats['most_popular_nation'] = most_popular.name if most_popular else None
         stats['most_popular_tanks_count'] = most_popular.tanks_count if most_popular else 0
         
-        # Если нет танков, то avg = None, заменяем на 0
         if stats['avg_tanks_per_nation'] is None:
             stats['avg_tanks_per_nation'] = 0
         
         return Response(stats)
 
-
-# ---------------------- Level ----------------------
 class LevelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
                    mixins.CreateModelMixin, mixins.UpdateModelMixin,
                    mixins.DestroyModelMixin, GenericViewSet):
@@ -91,7 +83,6 @@ class LevelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
 
     @action(detail=False, methods=['GET'], url_path='stats')
     def level_stats(self, request):
-        """Статистика по уровням"""
         stats = Level.objects.aggregate(
             total_levels=Count('id'),
             min_level=Min('level_number'),
@@ -99,7 +90,6 @@ class LevelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
             avg_level=Avg('level_number')
         )
         
-        # Распределение танков по уровням
         level_distribution = Level.objects.annotate(
             tanks_count=Count('tanks')
         ).values('level_number', 'tanks_count').order_by('level_number')
@@ -114,7 +104,6 @@ class LevelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
     def destroy(self, request, *args, **kwargs):
         level = self.get_object()
         
-        # Проверка: удалить можно только последний уровень
         max_level = Level.objects.aggregate(Max('level_number'))['level_number__max']
         
         if level.level_number != max_level:
@@ -123,16 +112,12 @@ class LevelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Находим все танки этого уровня
         tanks = Tank.objects.filter(level=level)
         
-        # 👇 Вычисляем сумму возврата ДО удаления танков
         total_refund = sum(tank.level.creation_cost for tank in tanks)
         
-        # Для каждого танка возвращаем полную стоимость владельцу
         for tank in tanks:
             if tank.is_in_battle:
-                # Отменяем бой, если танк в бою
                 battle = BattleRecord.objects.filter(tank=tank, result='pending').first()
                 if battle:
                     battle.result = 'defeat'
@@ -140,19 +125,16 @@ class LevelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
                     battle.finished_at = timezone.now()
                     battle.save()
                 tank.is_in_battle = False
-                tank.save()   # 👈 обязательно сохраняем
+                tank.save()  
             
-            # Возвращаем полную стоимость создания
             tank.owner.credits += tank.level.creation_cost
             tank.owner.save()
             tank.delete()
         
-        # Удаляем уровень
         level.delete()
         
         return Response({'success': True, 'message': f'Уровень {level.level_number} удалён. Возвращено кредитов: {total_refund}'})
 
-# ---------------------- Crewman ----------------------
 class CrewmanViewSet(viewsets.GenericViewSet):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = CrewmanSerializer
@@ -164,7 +146,7 @@ class CrewmanViewSet(viewsets.GenericViewSet):
         if self.action in ['update', 'partial_update', 'list_users']:
             return [IsStaffAnd2FAVerified()]
         if self.action == 'register':
-            return [permissions.AllowAny()]  # регистрация доступна всем
+            return [permissions.AllowAny()]  
         return super().get_permissions()
 
     def get_object(self):
@@ -215,7 +197,6 @@ class CrewmanViewSet(viewsets.GenericViewSet):
 
     @action(detail=False, methods=['GET'], url_path='list-users')
     def list_users(self, request):
-        """Список всех пользователей для суперюзера с 2FA"""
         crewmen = Crewman.objects.select_related('user').all()
         data = [{
             'id': c.id,
@@ -227,7 +208,6 @@ class CrewmanViewSet(viewsets.GenericViewSet):
         return Response(data)
 
     def update(self, request, pk=None):
-        """Обновление данных пользователя (только staff с 2FA)"""
         try:
             crewman = Crewman.objects.get(pk=pk)
         except Crewman.DoesNotExist:
@@ -248,8 +228,6 @@ class CrewmanViewSet(viewsets.GenericViewSet):
             'garage_slots': crewman.garage_slots
         })
 
-
-# ---------------------- Tank ----------------------
 class TankViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin,
                   mixins.DestroyModelMixin, GenericViewSet):
     serializer_class = TankSerializer
@@ -271,14 +249,11 @@ class TankViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Updat
         return context
 
     def update(self, request, *args, **kwargs):
-        """Обновление танка с проверкой прав"""
         tank = self.get_object()
         
-        # Если пользователь не владелец и не суперюзер
         if tank.owner.user != request.user and not request.user.is_superuser:
             return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
         
-        # Если суперюзер (но не владелец) — требуется 2FA
         if request.user.is_superuser and tank.owner.user != request.user:
             if not cache.get(f'2fa_{request.user.id}', False):
                 return Response({'error': '2FA required for editing other users tanks'}, 
@@ -358,7 +333,6 @@ class TankViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Updat
             return Response({'error': f'Не хватает кредитов. Нужно {cost}, у вас {tank.owner.credits}'}, 
                             status=status.HTTP_400_BAD_REQUEST)
         
-        # Выполняем улучшение
         tank.level = next_level
         tank.owner.credits -= cost
         tank.owner.save()
@@ -375,7 +349,6 @@ class TankViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Updat
         tank.sell()
         return Response({'success': True, 'credits_earned': price})
 
-    # Статистика по танкам (агрегаты)
     @action(detail=False, methods=['GET'], url_path='stats')
     def tank_stats(self, request):
         stats = Tank.objects.aggregate(
@@ -384,7 +357,6 @@ class TankViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Updat
             max_level=Max('level__level_number'),
             min_level=Min('level__level_number'),
         )
-        # дополнительно: самая популярная нация
         nation_popular = Tank.objects.values('nation__name').annotate(cnt=Count('id')).order_by('-cnt').first()
         stats['most_popular_nation'] = nation_popular['nation__name'] if nation_popular else None
         
@@ -393,12 +365,10 @@ class TankViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Updat
         
         return Response(stats)
 
-    # Экспорт в Excel
     @action(detail=False, methods=['GET'], url_path='export-excel')
     def export_tanks_excel(self, request):
         tanks = self.get_queryset()
         
-        # Фильтрация по владельцу, если передан параметр
         owner_id = request.GET.get('owner')
         if owner_id:
             tanks = tanks.filter(owner_id=owner_id)
@@ -441,8 +411,6 @@ class TankViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Updat
         response['Content-Disposition'] = 'attachment; filename="tanks.xlsx"'
         return response
 
-
-# ---------------------- BattleRecord ----------------------
 class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, GenericViewSet):
     serializer_class = BattleRecordSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -478,7 +446,6 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
         if battle_level.level_number not in [tank_lvl - 1, tank_lvl, tank_lvl + 1]:
             return Response({'error': 'Battle level not available for this tank'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Создаём запись о бое со статусом 'pending'
         battle_record = BattleRecord.objects.create(
             tank=tank,
             crewman=crewman,
@@ -489,11 +456,10 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
         tank.is_in_battle = True
         tank.save()
         
-        # Убираем поток и кэш – больше не нужны
         serializer = BattleRecordSerializer(battle_record)
         return Response({
             'id': battle_record.id,
-            'battle_duration': tank_lvl,  # длительность в секундах
+            'battle_duration': tank_lvl,  
             **serializer.data
         }, status=status.HTTP_201_CREATED)
         
@@ -534,7 +500,6 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
                 'remaining': remaining
             }, status=status.HTTP_400_BAD_REQUEST)
         
-        # Вычисляем шанс победы (как в start_battle)
         tank_lvl = battle.tank.level.level_number
         battle_lvl = battle.battle_level.level_number
         
@@ -545,11 +510,9 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
         else:
             win_chance = 25
         
-        # Определяем результат
         import random
         is_victory = random.randint(1, 100) <= win_chance
-        
-        # Обрабатываем результат (метод process_battle_result уже есть в модели)
+
         battle.process_battle_result(is_victory)
         
         serializer = BattleRecordSerializer(battle)
@@ -561,7 +524,6 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
         serializer = BattleRecordSerializer(battle)
         return Response(serializer.data)
 
-    # Статистика по боям
     @action(detail=False, methods=['GET'], url_path='stats')
     def battle_stats(self, request):
         crewman, created = Crewman.objects.get_or_create(user=self.request.user)
@@ -591,19 +553,16 @@ class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, Gene
         if battle.result != 'pending':
             return Response({'error': 'Бой уже завершён'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Отменяем бой
         battle.result = 'defeat'
         battle.reward_earned = 0
         battle.finished_at = timezone.now()
         battle.save()
         
-        # Освобождаем танк
         battle.tank.is_in_battle = False
         battle.tank.save()
         
         return Response({'success': True, 'message': 'Бой отменён'})
 
-# ---------------------- User (аутентификация + 2FA) ----------------------
 class UserViewSet(viewsets.GenericViewSet):
     permission_classes = [permissions.AllowAny]
 
@@ -613,7 +572,7 @@ class UserViewSet(viewsets.GenericViewSet):
             'username': request.user.username if request.user.is_authenticated else None,
             'is_authenticated': request.user.is_authenticated,
             'is_staff': request.user.is_staff,
-            'crewman_id': None,   # по умолчанию
+            'crewman_id': None,   
         }
         if request.user.is_authenticated:
             crewman, created = Crewman.objects.get_or_create(user=request.user)
@@ -628,7 +587,7 @@ class UserViewSet(viewsets.GenericViewSet):
     def login_user(self, request):
         username = request.data.get('username')
         password = request.data.get('password')
-        print(f"=== LOGIN ATTEMPT: {username} ===")  # отладка
+        print(f"=== LOGIN ATTEMPT: {username} ===")  
         
         user = authenticate(username=username, password=password)
         if user:
@@ -644,7 +603,6 @@ class UserViewSet(viewsets.GenericViewSet):
         logout(request)
         return Response({'success': True})
 
-    # 2FA: получить TOTP ключ (QR-код)
     @action(detail=False, methods=['GET'], url_path='get-totp')
     def get_totp(self, request):
         if not request.user.is_authenticated:
@@ -657,7 +615,6 @@ class UserViewSet(viewsets.GenericViewSet):
         provisioning_uri = totp.provisioning_uri(name=request.user.username, issuer_name="TankBattles")
         return Response({'url': provisioning_uri})
 
-    # 2FA: проверить код и активировать сессию
     @action(detail=False, methods=['POST'], url_path='second-login')
     def second_login(self, request):
         if not request.user.is_authenticated:
@@ -670,11 +627,10 @@ class UserViewSet(viewsets.GenericViewSet):
             return Response({'error': 'TOTP not set up'}, status=400)
         totp = pyotp.TOTP(crewman.totp_key)
         if totp.verify(key):
-            cache.set(f'2fa_{request.user.id}', True, timeout=600)  # 10 минут
+            cache.set(f'2fa_{request.user.id}', True, timeout=600)  
             return Response({'success': True})
         return Response({'success': False}, status=400)
 
-    # 2FA: выход из 2FA (сброс флага)
     @action(detail=False, methods=['POST'], url_path='logout-2fa')
     def logout_2fa(self, request):
         if request.user.is_authenticated:
@@ -683,13 +639,8 @@ class UserViewSet(viewsets.GenericViewSet):
     
     @action(detail=False, methods=['GET'], url_path='export-all-stats')
     def export_all_stats(self, request):
-        """Экспорт всей статистики в Excel (несколько листов)"""
-        from openpyxl import Workbook
-        from openpyxl.styles import Font, Alignment
-        
         wb = Workbook()
         
-        # Лист 1: Танки
         ws_tanks = wb.active
         ws_tanks.title = "Танки"
         tanks = Tank.objects.select_related('owner__user', 'nation', 'level').all()
@@ -708,7 +659,6 @@ class UserViewSet(viewsets.GenericViewSet):
             ws_tanks.cell(row=row, column=7, value='Да' if tank.is_in_battle else 'Нет')
             ws_tanks.cell(row=row, column=8, value=tank.created_at.strftime('%Y-%m-%d %H:%M'))
         
-        # Лист 2: Бои
         ws_battles = wb.create_sheet("Бои")
         battles = BattleRecord.objects.select_related('tank', 'crewman__user', 'battle_level').all()
         headers_battles = ['ID', 'Танк', 'Игрок', 'Уровень боя', 'Результат', 'Награда', 'Начало', 'Завершение']
@@ -726,7 +676,6 @@ class UserViewSet(viewsets.GenericViewSet):
             ws_battles.cell(row=row, column=7, value=battle.started_at.strftime('%Y-%m-%d %H:%M'))
             ws_battles.cell(row=row, column=8, value=battle.finished_at.strftime('%Y-%m-%d %H:%M') if battle.finished_at else '-')
         
-        # Лист 3: Игроки
         ws_players = wb.create_sheet("Игроки")
         crewmen = Crewman.objects.select_related('user').all()
         headers_players = ['ID', 'Имя', 'Кредиты', 'Слоты', 'Танков', 'Дата регистрации']
@@ -742,7 +691,6 @@ class UserViewSet(viewsets.GenericViewSet):
             ws_players.cell(row=row, column=5, value=crew.tanks.count())
             ws_players.cell(row=row, column=6, value=crew.created_at.strftime('%Y-%m-%d %H:%M'))
         
-        # Лист 4: Нации
         ws_nations = wb.create_sheet("Нации")
         nations = Nation.objects.all()
         headers_nations = ['ID', 'Название', 'Количество танков']
@@ -755,7 +703,6 @@ class UserViewSet(viewsets.GenericViewSet):
             ws_nations.cell(row=row, column=2, value=nation.name)
             ws_nations.cell(row=row, column=3, value=nation.tanks.count())
         
-        # Лист 5: Уровни
         ws_levels = wb.create_sheet("Уровни")
         levels = Level.objects.all()
         headers_levels = ['ID', 'Уровень', 'Стоимость создания', 'Награда за бой']
@@ -769,7 +716,6 @@ class UserViewSet(viewsets.GenericViewSet):
             ws_levels.cell(row=row, column=3, value=level.creation_cost)
             ws_levels.cell(row=row, column=4, value=level.battle_reward)
         
-        # Автоширина столбцов
         for ws in [ws_tanks, ws_battles, ws_players, ws_nations, ws_levels]:
             for column in ws.columns:
                 max_length = 0

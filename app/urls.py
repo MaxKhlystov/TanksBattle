@@ -18,7 +18,6 @@ router.register("tanks", TankViewSet, basename="tank")
 router.register("battles", BattleRecordViewSet, basename="battle")
 router.register("user", UserViewSet, basename="user")
 
-# Основные URL-паттерны
 urlpatterns = [
     path('', AllDataView.as_view()),
     path('admin/', admin.site.urls),

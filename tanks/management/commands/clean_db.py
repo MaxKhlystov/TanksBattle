@@ -35,36 +35,29 @@ class Command(BaseCommand):
         self.stdout.write(self.style.WARNING('STARTING DATABASE CLEANUP'))
         self.stdout.write(self.style.WARNING('='*50))
         
-        # 1. Удаляем записи о боях (всегда)
         battles_count = BattleRecord.objects.count()
         BattleRecord.objects.all().delete()
         self.stdout.write(self.style.SUCCESS(f'✓ Deleted {battles_count} battle records'))
         
-        # 2. Удаляем танки
         tanks_count = Tank.objects.count()
         Tank.objects.all().delete()
         self.stdout.write(self.style.SUCCESS(f'✓ Deleted {tanks_count} tanks'))
         
-        # 3. Удаляем пользователей (кроме суперюзера)
         if options.get('keep_superuser', True):
-            # Удаляем всех обычных пользователей (не superuser и не staff)
             users_to_delete = User.objects.filter(is_superuser=False, is_staff=False)
             users_count = users_to_delete.count()
             
-            # Сначала удаляем связанных Crewman
             for user in users_to_delete:
                 Crewman.objects.filter(user=user).delete()
             
             users_to_delete.delete()
             self.stdout.write(self.style.SUCCESS(f'✓ Deleted {users_count} regular users'))
         else:
-            # Удаляем всех пользователей
             users_count = User.objects.count()
             Crewman.objects.all().delete()
             User.objects.all().delete()
             self.stdout.write(self.style.SUCCESS(f'✓ Deleted {users_count} users (including superuser)'))
         
-        # 4. Удаляем уровни (опционально)
         if options.get('full') or not options.get('keep_levels'):
             levels_count = Level.objects.count()
             Level.objects.all().delete()
@@ -72,7 +65,6 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.WARNING('○ Kept levels data'))
         
-        # 5. Удаляем нации (опционально)
         if options.get('full') or not options.get('keep_nations'):
             nations_count = Nation.objects.count()
             Nation.objects.all().delete()
@@ -80,10 +72,8 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.WARNING('○ Kept nations data'))
         
-        # 6. Сброс автоинкрементов для SQLite
         self.reset_sequences()
         
-        # Итоговая статистика
         self.stdout.write(self.style.WARNING('='*50))
         self.stdout.write(self.style.SUCCESS('CLEANUP COMPLETED!'))
         self.stdout.write(self.style.WARNING('='*50))

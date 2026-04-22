@@ -62,7 +62,6 @@ async function verify2FA() {
     show2FAModal.value = false;
 }
 
-// В handleLogin после успешного входа
 async function handleLogin() {
     loginError.value = '';
     try {
@@ -72,7 +71,6 @@ async function handleLogin() {
             loginUsername.value = '';
             loginPassword.value = '';
             
-            // 👇 Принудительно обновляем данные ангара и пользователя
             await tanksStore.fetchMyTanks();
             await tanksStore.fetchLevels();
             await tanksStore.fetchNations();
@@ -80,7 +78,7 @@ async function handleLogin() {
             if (userInfo.value.is_staff && userInfo.value.second) {
                 await tanksStore.fetchAllCrewmen();
             }
-            // Обновляем CSRF-токен (см. пункт 15)
+
             const csrfToken = Cookies.get("csrftoken");
             if (csrfToken) {
                 axios.defaults.headers.common['X-CSRFToken'] = csrfToken;
@@ -115,7 +113,6 @@ async function handleRegister() {
     }
 }
 
-// В handleLogout убираем лишнее и вызываем сброс стора
 async function handleLogout() {
     try {
         await axios.post('/api/user/logout-2fa/');
@@ -123,12 +120,10 @@ async function handleLogout() {
         console.error('Error resetting 2FA:', error);
     }
     await userStore.logout();
-    tanksStore.resetStore();           // очищаем все данные
+    tanksStore.resetStore();           
     sessionStorage.removeItem('selectedUserId');
     showDropdown.value = false;
-    // 👇 Принудительно переходим на главную и обновляем состояние
     await router.push('/');
-    // Не делаем перезагрузку страницы, чтобы сохранить SPA-поведение
 }
 
 onBeforeMount(async () => {
@@ -221,7 +216,6 @@ onBeforeMount(async () => {
 
     <ImageViewer ref="imageViewer" />
 
-    <!-- Модальное окно входа -->
     <div v-if="showLoginModal" class="modal-overlay">
         <div class="modal-dialog-custom">
             <div class="custom-modal-content">
@@ -248,7 +242,6 @@ onBeforeMount(async () => {
         </div>
     </div>
 
-    <!-- Модальное окно регистрации -->
     <div v-if="showRegisterModal" class="modal-overlay">
         <div class="modal-dialog-custom">
             <div class="custom-modal-content">
@@ -283,7 +276,6 @@ onBeforeMount(async () => {
         </div>
     </div>
 
-    <!-- Модальное окно 2FA -->
     <div v-if="show2FAModal" class="modal-overlay">
         <div class="modal-dialog-custom">
             <div class="custom-modal-content">
@@ -309,16 +301,5 @@ onBeforeMount(async () => {
 </template>
 
 <style scoped>
-.badge-2fa-active {
-    background-color: #28a745;
-    color: white;
-    padding: 6px 12px;
-    border-radius: 20px;
-    font-size: 14px;
-    display: inline-block;
-}
 
-.main-content {
-    margin-top: 30px;
-}
 </style>

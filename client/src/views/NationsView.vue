@@ -95,7 +95,6 @@ function onEditFlagChange(event) { editFlagFile.value = event.target.files[0]; }
         <div v-else class="alert-custom-warning">Доступ только для администраторов</div>
     </div>
 
-    <!-- Модалка редактирования -->
     <div v-if="showEditModal" class="modal-overlay">
         <div class="modal-dialog-custom">
             <div class="custom-modal-content">
