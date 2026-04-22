@@ -10,7 +10,7 @@ import { showSuccess, showError } from '@/utils/notifications';
 const userStore = useUserStore();
 const tanksStore = useTanksStore();
 const openImageViewer = inject('openImageViewer');
-const selectedUserData = ref(null); 
+const selectedUserData = ref(null);
 
 const { userInfo } = storeToRefs(userStore);
 const { myTanks, levels, nations, allCrewmen, battles } = storeToRefs(tanksStore);
@@ -49,7 +49,7 @@ async function updateBattleTimers() {
                 battleId: activeBattle.id
             };
         } else if (tank.is_in_battle) {
-            await fetchMyTanks();
+            await tanksStore.fetchBattles()
         }
     }
 }
@@ -134,10 +134,10 @@ async function loadAllData() {
         }
         await updateBattleTimers();
         startTimerUpdates();
-
-        
     } catch (error) {
         console.error('Ошибка загрузки данных:', error);
+    } finally {
+        loading.value = false;
     }
 }
 
@@ -146,6 +146,7 @@ onBeforeMount(() => {
     if (savedUserId) {
         selectedUserId.value = parseInt(savedUserId);
     }
+    
     axios.defaults.withCredentials = true;
     const csrfToken = Cookies.get("csrftoken");
     if (csrfToken) {
@@ -187,7 +188,7 @@ async function handleUpgrade(tank) {
 
 async function confirmUpgrade() {
     if (!selectedTank.value) return;
-    
+
     showUpgradeModal.value = false;
     const tank = selectedTank.value;
     selectedTank.value = null;
@@ -209,7 +210,7 @@ async function handleSell(tank) {
 
 async function confirmSell() {
     if (!selectedTank.value) return;
-    
+
     showSellModal.value = false;
     const tank = selectedTank.value;
     selectedTank.value = null;

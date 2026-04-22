@@ -5,6 +5,7 @@ import { onBeforeMount, ref, provide } from 'vue';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
 import { storeToRefs } from "pinia";
+import { useRouter } from 'vue-router'
 import ImageViewer from '@/views/ImageViewer.vue';
 import { showSuccess, showError, showInfo } from '@/utils/notifications';
 
@@ -32,6 +33,7 @@ const regConfirmPassword = ref('');
 const regError = ref('');
 
 const imageViewer = ref(null);
+const router = useRouter()
 
 provide('openImageViewer', (url) => {
     if (imageViewer.value) imageViewer.value.open(url);
@@ -123,7 +125,7 @@ async function handleLogout() {
     tanksStore.resetStore();           
     sessionStorage.removeItem('selectedUserId');
     showDropdown.value = false;
-    await router.push('/');
+    router.push('/');
 }
 
 onBeforeMount(async () => {
