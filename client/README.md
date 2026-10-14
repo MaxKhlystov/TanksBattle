@@ -1,60 +1,54 @@
-# client
+2. Скачать проект
 
-This template should help get you started developing with Vue 3 in Vite.
+powershell
+cd "D:\Projects"          # любая папка
+git clone https://github.com/ВАШ_ЛОГИН/ВАШ_РЕПОЗИТОРИЙ.git
+cd ВАШ_РЕПОЗИТОРИЙ
 
-## Recommended IDE Setup
+3. Бэкенд
 
-[VS Code](https://code.visualstudio.com/) + [Vue (Official)](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur).
+powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py test tanks
+Если Activate.ps1 не запускается из-за политики выполнения скриптов, выполните один раз Set-ExecutionPolicy -Scope CurrentUser RemoteSigned.
+После создания .venv не переносите и не переименовывайте папку проекта: именно это сломало pytest у вас. Если всё же перенесли, удалите .venv и повторите этот шаг.
 
-## Recommended Browser Setup
+4. Тестовые данные (если база пустая)
 
-- Chromium-based browsers (Chrome, Edge, Brave, etc.):
-  - [Vue.js devtools](https://chromewebstore.google.com/detail/vuejs-devtools/nhdogjmejiglipccpnnnanhbledajbpd)
-  - [Turn on Custom Object Formatter in Chrome DevTools](http://bit.ly/object-formatters)
-- Firefox:
-  - [Vue.js devtools](https://addons.mozilla.org/en-US/firefox/addon/vue-js-devtools/)
-  - [Turn on Custom Object Formatter in Firefox DevTools](https://fxdx.dev/firefox-devtools-custom-object-formatters/)
+powershell
+python manage.py generate_data --users 20 --tanks 60 --battles 200
 
-## Customize configuration
+У сгенерированных игроков логины user_1, user_2… и пароль testpass123. Без параметров команда создаст 250 игроков, 1500 танков и 5000 боёв.
 
-See [Vite Configuration Reference](https://vite.dev/config/).
+5. Фронтенд
 
-## Project Setup
+powershell
+cd client
+npm ci
 
-```sh
-npm install
-```
+npm ci ставит пакеты строго по package-lock.json, поэтому версии будут те же, что у вас сейчас.
 
-### Compile and Hot-Reload for Development
+6. Запуск (два терминала)
 
-```sh
+powershell
+# терминал 1, корень проекта, с активированным .venv
+python manage.py runserver
+
+# терминал 2
+cd client
 npm run dev
-```
 
-### Compile and Minify for Production
+Откройте http://localhost:5173.
 
-```sh
-npm run build
-```
+7. 2FA для админа
+Войдите под суперпользователем, нажмите «🔐 2FA» и отсканируйте QR-код в приложении-аутентификаторе. На новой базе ключ новый, поэтому привязку нужно сделать заново: старая запись в приложении работать не будет.
 
-### Run Headed Component Tests with [Cypress Component Testing](https://on.cypress.io/component)
+Если после изменений снова потянете проект на этот компьютер командой git pull, повторите три команды:
 
-```sh
-npm run test:unit:dev # or `npm run test:unit` for headless testing
-```
-
-### Run End-to-End Tests with [Cypress](https://www.cypress.io/)
-
-```sh
-npm run test:e2e:dev
-```
-
-This runs the end-to-end tests against the Vite development server.
-It is much faster than the production build.
-
-But it's still recommended to test the production build with `test:e2e` before deploying (e.g. in CI environments):
-
-```sh
-npm run build
-npm run test:e2e
-```
+python -m pip install -r requirements.txt;
+python manage.py migrate;
+npm ci в папке client.
