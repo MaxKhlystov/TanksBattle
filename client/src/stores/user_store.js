@@ -2,30 +2,25 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import axios from "axios";
 
+const defaultUserInfo = () => ({
+    is_authenticated: false,
+    username: null,
+    is_staff: false,
+    credits: 0,
+    garage_slots: 3,
+    second: false,
+    crewman_id: null
+});
+
 export const useUserStore = defineStore("userStore", () => {
-    const userInfo = ref({
-        is_authenticated: false,
-        username: null,
-        is_staff: false,
-        credits: 0,
-        garage_slots: 3,
-        second: false,
-        crewman_id: null
-    });
+    const userInfo = ref(defaultUserInfo());
     
     async function checkLogin() {
         try {
             let r = await axios.get("/api/user/info/");
-            userInfo.value = r.data;
+            userInfo.value = { ...defaultUserInfo(), ...r.data };
         } catch (error) {
-            userInfo.value = {
-                is_authenticated: false,
-                username: null,
-                is_staff: false,
-                credits: 0,
-                garage_slots: 3,
-                second: false
-            };
+            userInfo.value = defaultUserInfo();
         }
     }
     
@@ -40,7 +35,7 @@ export const useUserStore = defineStore("userStore", () => {
         });
         await checkLogin();  
         return response.data;
-}
+    }
     
     async function logout() {
         try {
@@ -48,14 +43,7 @@ export const useUserStore = defineStore("userStore", () => {
         } catch (error) {
             console.error("Logout error:", error);
         } finally {
-            userInfo.value = {
-                is_authenticated: false,
-                username: null,
-                is_staff: false,
-                credits: 0,
-                garage_slots: 3,
-                second: false
-            };
+            userInfo.value = defaultUserInfo();
         }
     }
     

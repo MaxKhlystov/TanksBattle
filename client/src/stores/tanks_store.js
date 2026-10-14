@@ -1,8 +1,10 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import axios from "axios";
-import { useUserStore } from '@/stores/user_store';   
+import { useUserStore } from '@/stores/user_store';
 
+// Ошибки запросов, меняющих данные, не перехватываются здесь:
+// их показывает вызывающая страница (через showError + getErrorMessage).
 export const useTanksStore = defineStore("tanksStore", () => {
     const userStore = useUserStore();
     const myTanks = ref([]);
@@ -11,16 +13,21 @@ export const useTanksStore = defineStore("tanksStore", () => {
     const battles = ref([]);
     const allCrewmen = ref([]);
 
-    async function fetchTanks(params = {}) {
+    // Загрузка списка с сервера; при ошибке список очищается
+    async function load(url, target, params = {}) {
         try {
-            const response = await axios.get('/api/tanks/', { params });
-            myTanks.value = response.data;
-            return response.data;
+            const response = await axios.get(url, { params });
+            target.value = response.data;
         } catch (error) {
-            console.error('Ошибка загрузки танков:', error);
-            myTanks.value = [];
-            return [];
+            console.error(`Ошибка загрузки ${url}:`, error);
+            target.value = [];
         }
+        return target.value;
+    }
+
+    // --- Танки ---
+    function fetchTanks(params = {}) {
+        return load('/api/tanks/', myTanks, params);
     }
 
     async function fetchMyTanks() {
@@ -29,183 +36,87 @@ export const useTanksStore = defineStore("tanksStore", () => {
             myTanks.value = [];
             return [];
         }
-        return await fetchTanks({ owner__id: crewmanId });
+        return fetchTanks({ owner__id: crewmanId });
     }
 
-    async function uploadTankPhoto(tankId, file) {
-        const formData = new FormData();
-        formData.append('tank', tankId);
-        formData.append('image', file);
-        
-        try {
-            const response = await axios.post('/api/tank-photos/', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
-            });
-            // После загрузки обновляем список танков, чтобы подтянуть новое фото в массив photos
-            await fetchMyTanks(); 
-            return response.data;
-        } catch (error) {
-            console.error("Ошибка загрузки фото:", error);
-            throw error;
-        }
-    }
-
-    async function deleteTankPhoto(photoId) {
-        try {
-            await axios.delete(`/api/tank-photos/${photoId}/`);
-            await fetchMyTanks();
-        } catch (error) {
-            console.error("Ошибка удаления фото:", error);
-            throw error;
-        }
-    }
-
-    async function fetchTanksByUser(userId) {
-        return await fetchTanks({ owner__id: userId });
+    function fetchTanksByUser(userId) {
+        return fetchTanks({ owner__id: userId });
     }
 
     async function createTank(data) {
-        try {
-            const response = await axios.post("/api/tanks/create/", data);
-            await fetchMyTanks();
-            await userStore.checkLogin();
-            return response.data;
-        } catch (error) {
-            console.error("Ошибка создания танка:", error);
-            throw error;
-        }
+        const response = await axios.post("/api/tanks/create/", data);
+        await fetchMyTanks();
+        await userStore.checkLogin();
+        return response.data;
     }
 
+    // После улучшения/продажи список перезагружает страница (она знает, чей ангар открыт)
     async function upgradeTank(tankId) {
-        try {
-            const response = await axios.post(`/api/tanks/${tankId}/upgrade/`);
-            await fetchMyTanks();
-            await userStore.checkLogin();
-            return response.data;
-        } catch (error) {
-            console.error("Ошибка улучшения танка:", error);
-            throw error;
-        }
+        const response = await axios.post(`/api/tanks/${tankId}/upgrade/`);
+        return response.data;
     }
 
     async function sellTank(tankId) {
-        try {
-            const response = await axios.post(`/api/tanks/${tankId}/sell/`);
-            await fetchMyTanks();
-            await userStore.checkLogin();
-            return response.data;
-        } catch (error) {
-            console.error("Ошибка продажи танка:", error);
-            throw error;
-        }
+        const response = await axios.post(`/api/tanks/${tankId}/sell/`);
+        return response.data;
     }
 
-    async function fetchLevels() {
-        try {
-            const response = await axios.get("/api/levels/");
-            levels.value = response.data;
-            return response.data;
-        } catch (error) {
-            console.error("Ошибка загрузки уровней:", error);
-        }
+    // --- Уровни ---
+    function fetchLevels() {
+        return load("/api/levels/", levels);
     }
 
     async function createLevel(data) {
-        try {
-            const response = await axios.post("/api/levels/", data);
-            await fetchLevels();
-            return response.data;
-        } catch (error) {
-            console.error("Ошибка создания уровня:", error);
-            throw error;
-        }
+        const response = await axios.post("/api/levels/", data);
+        await fetchLevels();
+        return response.data;
     }
 
     async function deleteLevel(id) {
-        try {
-            await axios.delete(`/api/levels/${id}/`);
-            await fetchLevels();
-        } catch (error) {
-            console.error("Ошибка удаления уровня:", error);
-            throw error;
-        }
+        await axios.delete(`/api/levels/${id}/`);
+        await fetchLevels();
     }
 
-    async function fetchNations() {
-        try {
-            const response = await axios.get("/api/nations/");
-            nations.value = response.data;
-            return response.data;
-        } catch (error) {
-            console.error("Ошибка загрузки наций:", error);
-        }
+    // --- Нации ---
+    function fetchNations() {
+        return load("/api/nations/", nations);
     }
 
     async function createNation(data) {
-        try {
-            const response = await axios.post("/api/nations/", data);
-            await fetchNations();
-            return response.data;
-        } catch (error) {
-            console.error("Ошибка создания нации:", error);
-            throw error;
-        }
+        const response = await axios.post("/api/nations/", data);
+        await fetchNations();
+        return response.data;
     }
 
     async function updateNation(id, data) {
-        try {
-            const response = await axios.put(`/api/nations/${id}/`, data);
-            await fetchNations();
-            return response.data;
-        } catch (error) {
-            console.error("Ошибка обновления нации:", error);
-            throw error;
-        }
+        const response = await axios.put(`/api/nations/${id}/`, data);
+        await fetchNations();
+        return response.data;
     }
 
     async function deleteNation(id) {
-        try {
-            await axios.delete(`/api/nations/${id}/`);
-            await fetchNations();
-        } catch (error) {
-            console.error("Ошибка удаления нации:", error);
-            throw error;
-        }
+        await axios.delete(`/api/nations/${id}/`);
+        await fetchNations();
     }
 
-    async function fetchBattles() {
-        try {
-            const response = await axios.get("/api/battles/");
-            battles.value = response.data;
-            return response.data;
-        } catch (error) {
-            console.error("Ошибка загрузки боёв:", error);
-        }
+    // --- Бои ---
+    function fetchBattles(params = {}) {
+        return load("/api/battles/", battles, params);
     }
 
-    async function fetchBattlesByUser(userId) {
-        try {
-            const response = await axios.get(`/api/battles/?crewman=${userId}`);
-            battles.value = response.data;
-            return response.data;
-        } catch (error) {
-            console.error("Ошибка загрузки боёв пользователя:", error);
-        }
-    }
-
+    // Ответ сервера: запись боя (id, tank, battle_level, ...) + battle_duration в секундах
     async function startBattle(tankId, battleLevelId) {
         const response = await axios.post("/api/battles/start/", {
             tank_id: tankId,
             battle_level_id: battleLevelId
         });
-        const battleId = response.data.id;
-        const battleDuration = response.data.battle_duration || 5;
-        
-        return {
-            battleId: battleId,
-            battleDuration: battleDuration,
-            ...response.data
-        };
+        return response.data;
+    }
+
+    async function cancelBattle(battleId) {
+        await axios.post(`/api/battles/${battleId}/cancel/`);
+        await fetchMyTanks();
+        await fetchBattles();
     }
 
     async function claimBattle(battleId) {
@@ -226,16 +137,20 @@ export const useTanksStore = defineStore("tanksStore", () => {
         }
     }
 
-    async function fetchAllCrewmen() {
-        try {
-            const response = await axios.get('/api/crewman/list-users/');
-            allCrewmen.value = response.data;
-            return response.data;
-        } catch (error) {
-            console.error('Ошибка загрузки пользователей:', error);
-        }
+    // --- Игроки (для администратора) ---
+    function fetchAllCrewmen() {
+        return load('/api/crewman/list-users/', allCrewmen);
     }
 
+    async function updateCrewman(crewman) {
+        const response = await axios.put(`/api/crewman/${crewman.id}/`, {
+            credits: crewman.credits,
+            garage_slots: crewman.garage_slots
+        });
+        return response.data;
+    }
+
+    // --- Справочники ---
     function getLevelInfo(levelId) {
         return levels.value.find(l => l.id === levelId);
     }
@@ -258,8 +173,8 @@ export const useTanksStore = defineStore("tanksStore", () => {
         nations,
         battles,
         allCrewmen,
-        fetchMyTanks,
         fetchTanks,
+        fetchMyTanks,
         fetchTanksByUser,
         createTank,
         upgradeTank,
@@ -273,14 +188,13 @@ export const useTanksStore = defineStore("tanksStore", () => {
         deleteNation,
         fetchBattles,
         startBattle,
+        cancelBattle,
+        claimBattle,
+        getBattleRemainingTime,
         fetchAllCrewmen,
+        updateCrewman,
         getLevelInfo,
         getNationInfo,
-        getBattleRemainingTime,
-        fetchBattlesByUser,
-        claimBattle,
         resetStore,
-        uploadTankPhoto, 
-        deleteTankPhoto,
     };
 });

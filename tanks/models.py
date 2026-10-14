@@ -66,22 +66,6 @@ class Crewman(models.Model):
     def __str__(self):
         return f"{self.user.username} (Кредитов: {self.credits})"
 
-    def can_afford(self, amount):
-        return self.credits >= amount
-
-    def deduct_credits(self, amount):
-        updated = Crewman.objects.filter(pk=self.pk, credits__gte=amount).update(
-            credits=F('credits') - amount
-        )
-        if updated:
-            self.refresh_from_db(fields=['credits'])
-            return True
-        return False
-
-    def add_credits(self, amount):
-        Crewman.objects.filter(pk=self.pk).update(credits=F('credits') + amount)
-        self.refresh_from_db(fields=['credits'])
-
     def available_garage_slots(self):
         return self.garage_slots - self.tanks.count()
 
@@ -109,21 +93,6 @@ class Tank(models.Model):
     def upgrade_cost(self):
         return self.level.upgrade_to_next_cost
 
-    def can_upgrade(self):
-        next_level = Level.objects.filter(level_number=self.level.level_number + 1).first()
-        return next_level is not None and not self.is_in_battle
-
-    def upgrade(self):
-        if not self.can_upgrade():
-            return False
-        next_level = Level.objects.filter(level_number=self.level.level_number + 1).first()
-        cost = self.level.upgrade_to_next_cost
-        if self.owner.deduct_credits(cost):
-            self.level = next_level
-            self.save()
-            return True
-        return False
-
     @property
     def sell_price(self):
         return self.level.creation_cost // 2
@@ -146,16 +115,6 @@ class Tank(models.Model):
         verbose_name_plural = "Танки"
         ordering = ['-created_at']
 
-class TankPhoto(models.Model):
-    """Модель для альбома фотографий танка"""
-    tank = models.ForeignKey(Tank, on_delete=models.CASCADE, related_name='photos')
-    image = models.ImageField("Фотография", upload_to="images/tanks/gallery/")
-    uploaded_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        verbose_name = "Фотография танка"
-        verbose_name_plural = "Фотографии танков"
-
 class BattleRecord(models.Model):
     RESULT_CHOICES = [
         ('pending', 'Ожидание'),
@@ -172,6 +131,23 @@ class BattleRecord(models.Model):
 
     def __str__(self):
         return f"{self.tank.name} - {self.get_result_display()} на {self.battle_level}"
+
+    @property
+    def duration(self):
+        """Длительность боя в секундах: равна уровню танка."""
+        return self.tank.level.level_number
+
+    @staticmethod
+    def cancel_pending(battles):
+        """
+        Переводит незавершённые бои из выборки в поражение и освобождает их танки.
+        Единая точка для отмены боя игроком, удаления уровня и действия в админке.
+        Возвращает количество отменённых боёв.
+        """
+        with transaction.atomic():
+            pending = battles.filter(result='pending')
+            Tank.objects.filter(pk__in=pending.values('tank_id')).update(is_in_battle=False)
+            return pending.update(result='defeat', reward_earned=0, finished_at=timezone.now())
 
     def process_battle_result(self, is_victory):
         """
@@ -200,4 +176,4 @@ class BattleRecord(models.Model):
     class Meta:
         verbose_name = "Запись о сражении"
         verbose_name_plural = "Записи о сражениях"
-        ordering = ['-started_at']
+        ordering = ['-started_at']

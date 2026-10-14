@@ -2,11 +2,12 @@ from django.core.management.base import BaseCommand
 from django.contrib.auth.models import User
 from django.db import connection
 
-from tanks.models import Nation, Level, Crewman, Tank, TankPhoto, BattleRecord
+from tanks.models import Nation, Level, Crewman, Tank, BattleRecord
 
 
 class Command(BaseCommand):
-    help = 'Clean all database tables (except superuser and basic data)'
+    help = ('Удаляет бои, танки, обычных игроков, уровни и нации. '
+            'Сотрудники и суперпользователи сохраняются, если не указан --delete-superusers.')
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -20,19 +21,9 @@ class Command(BaseCommand):
             help='Keep nations data (do not delete)',
         )
         parser.add_argument(
-            '--keep-superuser',
-            action='store_true',
-            help='Deprecated: staff and superuser accounts are kept by default',
-        )
-        parser.add_argument(
             '--delete-superusers',
             action='store_true',
             help='Also delete staff and superuser accounts (default: keep them)',
-        )
-        parser.add_argument(
-            '--full',
-            action='store_true',
-            help='Full clean - delete ALL data including levels and nations',
         )
         parser.add_argument(
             '--noinput',
@@ -60,28 +51,24 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f'✓ Deleted {tanks_count} tanks'))
         
         if not options['delete_superusers']:
+            # профили игроков (Crewman) удаляются каскадно вместе с пользователями
             users_to_delete = User.objects.filter(is_superuser=False, is_staff=False)
             users_count = users_to_delete.count()
-            
-            for user in users_to_delete:
-                Crewman.objects.filter(user=user).delete()
-            
             users_to_delete.delete()
             self.stdout.write(self.style.SUCCESS(f'✓ Deleted {users_count} regular users'))
         else:
             users_count = User.objects.count()
-            Crewman.objects.all().delete()
             User.objects.all().delete()
             self.stdout.write(self.style.SUCCESS(f'✓ Deleted {users_count} users (including superuser)'))
         
-        if options.get('full') or not options.get('keep_levels'):
+        if not options['keep_levels']:
             levels_count = Level.objects.count()
             Level.objects.all().delete()
             self.stdout.write(self.style.SUCCESS(f'✓ Deleted {levels_count} levels'))
         else:
             self.stdout.write(self.style.WARNING('○ Kept levels data'))
         
-        if options.get('full') or not options.get('keep_nations'):
+        if not options['keep_nations']:
             nations_count = Nation.objects.count()
             Nation.objects.all().delete()
             self.stdout.write(self.style.SUCCESS(f'✓ Deleted {nations_count} nations'))
@@ -106,7 +93,7 @@ class Command(BaseCommand):
         if connection.vendor == 'sqlite':
             tables = [
                 m._meta.db_table
-                for m in (BattleRecord, TankPhoto, Tank, Crewman, Level, Nation)
+                for m in (BattleRecord, Tank, Crewman, Level, Nation)
             ]
             placeholders = ', '.join(['%s'] * len(tables))
             try:
@@ -117,4 +104,4 @@ class Command(BaseCommand):
                     )
                 self.stdout.write(self.style.SUCCESS('✓ Reset auto-increment sequences'))
             except Exception as e:
-                self.stdout.write(self.style.WARNING(f'Не удалось сбросить автоинкременты: {e}'))
+                self.stdout.write(self.style.WARNING(f'Не удалось сбросить автоинкременты: {e}'))

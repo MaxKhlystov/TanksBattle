@@ -61,8 +61,13 @@ class TankAdmin(admin.ModelAdmin):
     sell_price.short_description = "Цена продажи"
     
     def free_tanks_from_battle(self, request, queryset):
-        updated = queryset.update(is_in_battle=False)
-        self.message_user(request, f"{updated} танков освобождено из боя")
+        # Сначала закрываем активные бои этих танков (поражение), иначе запись боя
+        # осталась бы «в ожидании» и её можно было бы позже забрать с наградой
+        cancelled = BattleRecord.cancel_pending(BattleRecord.objects.filter(tank__in=queryset))
+        freed = queryset.filter(is_in_battle=True).update(is_in_battle=False)
+        self.message_user(
+            request, f"Освобождено танков: {cancelled + freed}, отменено боёв: {cancelled}"
+        )
     free_tanks_from_battle.short_description = "Освободить выбранные танки из боя"
 
 @admin.register(BattleRecord)
@@ -73,21 +78,19 @@ class BattleRecordAdmin(admin.ModelAdmin):
     search_fields = ['tank__name', 'crewman__user__username']
     readonly_fields = ['result', 'started_at', 'finished_at', 'reward_earned']
     actions = ['process_victory', 'process_defeat']
-    
+
+    def _finish_battles(self, request, queryset, is_victory, label):
+        # process_battle_result возвращает None, если бой уже был завершён
+        count = sum(
+            1 for battle in queryset.filter(result='pending')
+            if battle.process_battle_result(is_victory) is not None
+        )
+        self.message_user(request, f"{count} боёв отмечено как {label}")
+
     def process_victory(self, request, queryset):
-        count = 0
-        for battle in queryset:
-            if battle.result == 'pending':
-                battle.process_battle_result(True)
-                count += 1
-        self.message_user(request, f"{count} боёв отмечено как победа")
+        self._finish_battles(request, queryset, True, "победа")
     process_victory.short_description = "Отметить выбранные бои как ПОБЕДУ"
-    
+
     def process_defeat(self, request, queryset):
-        count = 0
-        for battle in queryset:
-            if battle.result == 'pending':
-                battle.process_battle_result(False)
-                count += 1
-        self.message_user(request, f"{count} боёв отмечено как поражение")
+        self._finish_battles(request, queryset, False, "поражение")
     process_defeat.short_description = "Отметить выбранные бои как ПОРАЖЕНИЕ"

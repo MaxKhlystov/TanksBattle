@@ -43,9 +43,9 @@ function distPercent(count) {
 async function exportAllToExcel() {
     try {
         const response = await axios.get('/api/user/export-all-stats/', { responseType: 'blob' });
-        const blob = new Blob([response.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        // при responseType: 'blob' axios уже возвращает Blob
         const link = document.createElement('a');
-        const objectUrl = URL.createObjectURL(blob);
+        const objectUrl = URL.createObjectURL(response.data);
         link.href = objectUrl;
         link.setAttribute('download', 'full_statistics.xlsx');
         document.body.appendChild(link);
@@ -70,7 +70,7 @@ onBeforeMount(() => {
 
 <template>
     <div class="custom-container">
-        <div v-if="userInfo && userInfo.is_authenticated && userInfo.is_staff">
+        <div v-if="userInfo.is_authenticated && userInfo.is_staff">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2 class="stats-title">Статистика</h2>
                 <button class="btn-custom-success" :disabled="!userInfo.second"
@@ -108,9 +108,6 @@ onBeforeMount(() => {
                                 <h3 class="text-info">{{ tankStats.min_level || 0 }}</h3>
                                 <p>Мин. уровень</p>
                             </div>
-                        </div>
-                        <div class="alert alert-info mt-3">
-                            <strong>Самая популярная нация:</strong> {{ tankStats.most_popular_nation || '—' }}
                         </div>
                     </div>
                 </div>
@@ -207,4 +204,4 @@ onBeforeMount(() => {
         </div>
         <div v-else class="alert-custom-warning">Доступ только для администраторов</div>
     </div>
-</template>
+</template>

@@ -1,10 +1,10 @@
 <script setup>
-import { onBeforeMount, onMounted, ref, computed, watch, inject, onUnmounted } from 'vue';
+import { onBeforeMount, onMounted, ref, watch, inject, onUnmounted, computed } from 'vue';
 import axios from 'axios';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
 import { storeToRefs } from "pinia";
-import { showSuccess, showError } from '@/utils/notifications';
+import { showSuccess, showError, getErrorMessage } from '@/utils/notifications';
 
 const userStore = useUserStore();
 const tanksStore = useTanksStore();
@@ -13,7 +13,6 @@ const selectedUserData = ref(null);
 
 const { userInfo } = storeToRefs(userStore);
 const { myTanks, levels, nations, allCrewmen } = storeToRefs(tanksStore);
-const { fetchAllCrewmen, fetchMyTanks, fetchLevels, fetchNations, upgradeTank, sellTank, uploadTankPhoto, deleteTankPhoto } = tanksStore;
 
 const selectedTank = ref(null);
 const showUpgradeModal = ref(false);
@@ -28,15 +27,13 @@ const loading = ref(false);
 // Количество танков в ангаре без учёта фильтров
 const garageCount = ref(0);
 
-// Галерея
-const showGalleryModal = ref(false);
-const galleryTankId = ref(null);
-const currentGalleryTank = computed(
-    () => myTanks.value?.find(t => t.id === galleryTankId.value) || null
-);
-
 const filters = ref({ nation: null, level: null, is_in_battle: null });
 const selectedUserId = ref(null);
+
+// Администратор с 2FA смотрит чужой ангар
+const viewingOtherUser = computed(() =>
+    !!(selectedUserId.value && userInfo.value.is_staff && userInfo.value.second)
+);
 
 const battleTimers = ref({});
 let timerInterval = null;
@@ -56,11 +53,7 @@ async function syncBattleTimers() {
         const activeBattle = data.find(b => b.tank === tank.id);
         if (activeBattle) {
             const timeData = await tanksStore.getBattleRemainingTime(activeBattle.id);
-            next[tank.id] = {
-                remaining: timeData.remaining,
-                total: timeData.total_duration,
-                battleId: activeBattle.id
-            };
+            next[tank.id] = { remaining: timeData.remaining };
         }
     }
     battleTimers.value = next;
@@ -76,18 +69,10 @@ function startTimerUpdates() {
     }, 1000);
 }
 
-function formatBattleTime(seconds) {
-    if (seconds <= 0) return 'Завершается...';
-    return `${seconds} сек`;
+function battleStatusText(tank) {
+    const seconds = battleTimers.value[tank.id]?.remaining;
+    return seconds > 0 ? `${seconds} сек` : 'В бою';
 }
-
-watch(selectedUserId, (newVal) => {
-    if (newVal) {
-        sessionStorage.setItem('selectedUserId', newVal);
-    } else {
-        sessionStorage.removeItem('selectedUserId');
-    }
-});
 
 watch(() => userInfo.value.is_authenticated, async (newVal, oldVal) => {
     if (newVal === true && oldVal === false) {
@@ -96,10 +81,9 @@ watch(() => userInfo.value.is_authenticated, async (newVal, oldVal) => {
 });
 
 async function loadTanks() {
-    if (selectedUserId.value && userInfo.value.is_staff && userInfo.value.second) {
+    if (viewingOtherUser.value) {
         await tanksStore.fetchTanksByUser(selectedUserId.value);
-        const selectedUser = allCrewmen.value.find(c => c.id === selectedUserId.value);
-        selectedUserData.value = selectedUser || null;
+        selectedUserData.value = allCrewmen.value.find(c => c.id === selectedUserId.value) || null;
     } else {
         await tanksStore.fetchMyTanks();
         selectedUserData.value = null;
@@ -116,20 +100,13 @@ async function applyFilters() {
         await loadTanks();
         return;
     }
-
-    let url = '/api/tanks/';
-    const params = new URLSearchParams();
-    if (filters.value.nation) params.append('nation__name', filters.value.nation);
-    if (filters.value.level) params.append('level__level_number', filters.value.level);
-    if (filters.value.is_in_battle !== null) params.append('is_in_battle', filters.value.is_in_battle);
-
-    const ownerId = (selectedUserId.value && userInfo.value.is_staff && userInfo.value.second)
-        ? selectedUserId.value
-        : userInfo.value.crewman_id;
-    if (ownerId) params.append('owner__id', ownerId);
-
-    const response = await axios.get(url + '?' + params.toString());
-    myTanks.value = response.data;
+    const params = {
+        owner__id: viewingOtherUser.value ? selectedUserId.value : userInfo.value.crewman_id,
+    };
+    if (filters.value.nation) params.nation__name = filters.value.nation;
+    if (filters.value.level) params.level__level_number = filters.value.level;
+    if (filters.value.is_in_battle !== null) params.is_in_battle = filters.value.is_in_battle;
+    await tanksStore.fetchTanks(params);
 }
 
 async function reloadTanks() {
@@ -140,7 +117,14 @@ async function reloadTanks() {
 }
 
 watch(filters, () => applyFilters(), { deep: true });
-watch(selectedUserId, async () => {
+
+// Выбранный ангар запоминается до конца сессии браузера
+watch(selectedUserId, async (newVal) => {
+    if (newVal) {
+        sessionStorage.setItem('selectedUserId', newVal);
+    } else {
+        sessionStorage.removeItem('selectedUserId');
+    }
     await reloadTanks();
 });
 
@@ -149,14 +133,14 @@ async function loadAllData() {
     try {
         await userStore.checkLogin();
         await loadTanks();
-        if (!levels.value || levels.value.length === 0) {
-            await fetchLevels();
+        if (!levels.value.length) {
+            await tanksStore.fetchLevels();
         }
-        if (!nations.value || nations.value.length === 0) {
-            await fetchNations();
+        if (!nations.value.length) {
+            await tanksStore.fetchNations();
         }
-        if (userInfo.value.is_staff && userInfo.value.second && (!allCrewmen.value || allCrewmen.value.length === 0)) {
-            await fetchAllCrewmen();
+        if (userInfo.value.is_staff && userInfo.value.second && !allCrewmen.value.length) {
+            await tanksStore.fetchAllCrewmen();
         }
         await syncBattleTimers();
         startTimerUpdates();
@@ -182,67 +166,37 @@ onMounted(() => {
     loadAllData();
 });
 
-function getLevelNumber(levelId) {
-    const level = tanksStore.getLevelInfo(levelId);
-    return level ? level.level_number : '?';
-}
-
-function getNationName(nationId) {
-    const nation = tanksStore.getNationInfo(nationId);
-    return nation ? nation.name : '?';
-}
-
-function getUpgradeCost(tank) {
-    const currentLevel = levels.value.find(l => l.level_number === tank.level_number);
-    if (!currentLevel) {
-        return null;
-    }
-    const cost = currentLevel.upgrade_to_next_cost;
-    return cost || null;
-}
-
-async function handleUpgrade(tank) {
+function openUpgradeModal(tank) {
     selectedTank.value = tank;
     showUpgradeModal.value = true;
 }
 
-async function confirmUpgrade() {
-    if (!selectedTank.value) return;
-
-    showUpgradeModal.value = false;
-    const tank = selectedTank.value;
-    selectedTank.value = null;
-
-    try {
-        await upgradeTank(tank.id);
-        await loadAllData();
-        showSuccess('Улучшение!', 'Танк успешно улучшен');
-    } catch (error) {
-        const errorMsg = error.response?.data?.error || 'Ошибка улучшения';
-        showError('Ошибка', errorMsg);
-    }
-}
-
-async function handleSell(tank) {
+function openSellModal(tank) {
     selectedTank.value = tank;
     showSellModal.value = true;
 }
 
-async function confirmSell() {
+// Общая часть подтверждения улучшения и продажи
+async function confirmAction(modalFlag, action, successTitle, successText, errorText) {
     if (!selectedTank.value) return;
-
-    showSellModal.value = false;
+    modalFlag.value = false;
     const tank = selectedTank.value;
     selectedTank.value = null;
-
     try {
-        await sellTank(tank.id);
+        await action(tank.id);
         await loadAllData();
-        showSuccess('Продажа!', 'Танк успешно продан');
+        showSuccess(successTitle, successText);
     } catch (error) {
-        const errorMsg = error.response?.data?.error || 'Ошибка продажи';
-        showError('Ошибка', errorMsg);
+        showError('Ошибка', getErrorMessage(error, errorText));
     }
+}
+
+function confirmUpgrade() {
+    return confirmAction(showUpgradeModal, tanksStore.upgradeTank, 'Улучшение!', 'Танк успешно улучшен', 'Ошибка улучшения');
+}
+
+function confirmSell() {
+    return confirmAction(showSellModal, tanksStore.sellTank, 'Продажа!', 'Танк успешно продан', 'Ошибка продажи');
 }
 
 async function expandGarage() {
@@ -250,7 +204,7 @@ async function expandGarage() {
         await userStore.expandGarage();
         await loadAllData();
     } catch (error) {
-        showError('Ошибка', error.response?.data?.error || 'Не удалось расширить ангар');
+        showError('Ошибка', getErrorMessage(error, 'Не удалось расширить ангар'));
     }
 }
 
@@ -287,8 +241,7 @@ async function saveEdit() {
         await loadAllData();
         showSuccess('Сохранено!', 'Танк обновлён');
     } catch (error) {
-        const data = error.response?.data;
-        showError('Ошибка', data?.error || data?.detail || 'Не удалось сохранить танк');
+        showError('Ошибка', getErrorMessage(error, 'Не удалось сохранить танк'));
     }
 }
 
@@ -297,46 +250,11 @@ async function refreshCrewmenList() {
         await tanksStore.fetchAllCrewmen();
     }
 }
-
-// --- Логика Галереи ---
-
-function openGallery(tank) {
-    galleryTankId.value = tank.id;
-    showGalleryModal.value = true;
-}
-
-async function handleGalleryUpload(event) {
-    const input = event.target;
-    const file = input.files[0];
-    if (file && currentGalleryTank.value) {
-        try {
-            await uploadTankPhoto(currentGalleryTank.value.id, file);
-            await reloadTanks();
-            showSuccess('Успех', 'Фото добавлено в альбом');
-        } catch (error) {
-            showError('Ошибка', 'Не удалось загрузить фото');
-        } finally {
-            input.value = '';
-        }
-    }
-}
-
-async function handleDeletePhoto(photoId) {
-    if (confirm('Удалить это фото?')) {
-        try {
-            await deleteTankPhoto(photoId);
-            await reloadTanks();
-            showSuccess('Удалено', 'Фотография удалена');
-        } catch (error) {
-            showError('Ошибка', 'Не удалось удалить фото');
-        }
-    }
-}
 </script>
 
 <template>
     <div class="custom-container">
-        <div v-if="userInfo && userInfo.is_authenticated">
+        <div v-if="userInfo.is_authenticated">
             <div v-if="loading" class="text-center p-5">
                 <div class="alert-custom-info">Загрузка данных...</div>
             </div>
@@ -379,7 +297,7 @@ async function handleDeletePhoto(photoId) {
                         <div class="custom-card bg-primary text-white">
                             <div class="custom-card-body">
                                 <h5>Кредиты</h5>
-                                <h2>{{ selectedUserId && selectedUserData ? selectedUserData.credits : (userInfo.credits || 0) }} 💰</h2>
+                                <h2>{{ viewingOtherUser && selectedUserData ? selectedUserData.credits : (userInfo.credits || 0) }} 💰</h2>
                             </div>
                         </div>
                     </div>
@@ -387,8 +305,8 @@ async function handleDeletePhoto(photoId) {
                         <div class="custom-card bg-success text-white">
                             <div class="custom-card-body">
                                 <h5>Ангар</h5>
-                                <h2>{{ garageCount }} / {{ selectedUserId && selectedUserData ? selectedUserData.garage_slots : (userInfo.garage_slots || 3) }}</h2>
-                                <button v-if="!selectedUserId && garageCount >= (userInfo.garage_slots || 3)" 
+                                <h2>{{ garageCount }} / {{ viewingOtherUser && selectedUserData ? selectedUserData.garage_slots : userInfo.garage_slots }}</h2>
+                                <button v-if="!viewingOtherUser && garageCount >= userInfo.garage_slots" 
                                         class="btn-custom-warning btn-sm mt-2" @click="expandGarage">
                                     + Место (500💰)
                                 </button>
@@ -398,7 +316,7 @@ async function handleDeletePhoto(photoId) {
                 </div>
 
                 <div class="d-flex justify-content-between align-items-center mb-3">
-                    <h2 class="tanks-title">Мои танки</h2>
+                    <h2 class="tanks-title">{{ viewingOtherUser && selectedUserData ? `Танки игрока ${selectedUserData.username}` : 'Мои танки' }}</h2>
                 </div>
 
                 <div class="row" v-if="myTanks && myTanks.length > 0">
@@ -407,51 +325,43 @@ async function handleDeletePhoto(photoId) {
                             <div class="tank-image" @click="openImageViewer(tank.picture)" v-if="tank.picture">
                                 <img :src="tank.picture" class="tank-img">
                             </div>
-                            <div class="tank-image-placeholder" @click="openImageViewer(tank.picture)" v-else>
+                            <div class="tank-image-placeholder" v-else>
                                 🚀
                             </div>
                             
                             <div class="d-flex justify-content-between align-items-center mt-2">
                                 <h5>{{ tank.name }}</h5>
-                                <span class="badge" style="background:#dc3545; padding:4px 8px; border-radius:20px;">Lv.{{ getLevelNumber(tank.level) }}</span>
+                                <span class="badge" style="background:#dc3545; padding:4px 8px; border-radius:20px;">Lv.{{ tank.level_number }}</span>
                             </div>
                             
                             <p><strong>Нация: </strong> 
                                 <img v-if="tanksStore.getNationInfo(tank.nation)?.flag" 
                                      :src="tanksStore.getNationInfo(tank.nation).flag" 
                                      style="width: 24px; height: 16px; object-fit: cover; margin-left: 5px;">
-                                {{ getNationName(tank.nation) }}
+                                {{ tank.nation_name }}
                             </p>
                             <p><strong>Урон/мин: </strong> {{ tank.dpm }}</p>
                             <p><strong>Статус: </strong> 
-                                <span v-if="tank.is_in_battle" class="text-warning">
-                                    ⚔️ {{ battleTimers[tank.id]?.remaining > 0 ? formatBattleTime(battleTimers[tank.id].remaining) : 'В бою' }}
-                                </span>
+                                <span v-if="tank.is_in_battle" class="text-warning">⚔️ В бою</span>
                                 <span v-else class="text-success">
                                     Готов
                                 </span>
                             </p>
                             
                             <div class="d-flex gap-2 mt-3" v-if="!tank.is_in_battle">
-                                <button v-if="getUpgradeCost(tank)" 
+                                <button v-if="tank.upgrade_cost" 
                                         class="btn-action btn-upgrade" 
-                                        @click="handleUpgrade(tank)"
+                                        @click="openUpgradeModal(tank)"
                                         title="Улучшить">⬆️</button>
                                 <button class="btn-action btn-sell" 
-                                        @click="handleSell(tank)"
+                                        @click="openSellModal(tank)"
                                         title="Продать">💰</button>
                                 <button class="btn-action btn-edit" 
                                         @click="openEditModal(tank)"
                                         title="Редактировать">✏️</button>
-                                <button class="btn-action" 
-                                        style="background-color: #17a2b8; color: white;" 
-                                        @click="openGallery(tank)" 
-                                        title="Альбом">
-                                    📷 {{ tank.photos?.length || 0 }}
-                                </button>
                             </div>
                             <div v-else class="alert-custom-warning text-center mt-2">
-                                ⚔️ {{ battleTimers[tank.id]?.remaining > 0 ? formatBattleTime(battleTimers[tank.id].remaining) : 'В бою' }}
+                                ⚔️ {{ battleStatusText(tank) }}
                             </div>
                         </div>
                     </div>
@@ -478,7 +388,7 @@ async function handleDeletePhoto(photoId) {
                 </div>
                 <div class="custom-modal-body">
                     <p>Вы уверены, что хотите улучшить <strong>{{ selectedTank?.name }}</strong>?</p>
-                    <p>Стоимость: <strong>{{ getUpgradeCost(selectedTank) }} 💰</strong></p>
+                    <p>Стоимость: <strong>{{ selectedTank?.upgrade_cost }} 💰</strong></p>
                 </div>
                 <div class="custom-modal-footer">
                     <button class="btn-custom-secondary" @click="showUpgradeModal = false">Отмена</button>
@@ -540,39 +450,4 @@ async function handleDeletePhoto(photoId) {
             </div>
         </div>
     </div>
-
-    <!-- Модалка Галереи (Альбома) -->
-    <div v-if="showGalleryModal && currentGalleryTank" class="modal-overlay">
-        <div class="modal-dialog-custom" style="max-width: 800px;">
-            <div class="custom-modal-content">
-                <div class="custom-modal-header">
-                    <h5>Альбом: {{ currentGalleryTank.name }}</h5>
-                    <button class="close-btn" @click="showGalleryModal = false">&times;</button>
-                </div>
-                <div class="custom-modal-body">
-                    <div class="row mb-3">
-                        <div class="col-md-12">
-                            <label>Добавить фото:</label>
-                            <input type="file" class="custom-form-control" @change="handleGalleryUpload" accept="image/*">
-                        </div>
-                    </div>
-                    <div class="row" v-if="currentGalleryTank.photos && currentGalleryTank.photos.length > 0">
-                        <div class="col-md-4 mb-3" v-for="photo in currentGalleryTank.photos" :key="photo.id">
-                            <div class="position-relative">
-                                <img :src="photo.image" 
-                                     class="img-fluid rounded" 
-                                     @click="openImageViewer(photo.image)" 
-                                     style="cursor: pointer; height: 150px; object-fit: cover; width: 100%;">
-                                <button class="btn btn-danger btn-sm position-absolute top-0 end-0 m-1" 
-                                        @click="handleDeletePhoto(photo.id)">🗑️</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div v-else class="text-center text-white">
-                        В альбоме пока нет фотографий
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</template>
+</template>

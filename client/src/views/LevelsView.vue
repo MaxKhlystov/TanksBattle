@@ -3,8 +3,7 @@ import { onBeforeMount, ref, computed } from 'vue';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
 import { storeToRefs } from "pinia";
-import { showSuccess, showError } from '@/utils/notifications';
-import Swal from 'sweetalert2';
+import { showSuccess, showError, showConfirm, getErrorMessage } from '@/utils/notifications';
 
 const userStore = useUserStore();
 const tanksStore = useTanksStore();
@@ -15,78 +14,54 @@ const { levels } = storeToRefs(tanksStore);
 const newLevelNumber = ref(null);
 const levelError = ref('');
 
+const maxLevelNumber = computed(() => Math.max(0, ...levels.value.map(l => l.level_number)));
+
 onBeforeMount(async () => {
     await tanksStore.fetchLevels();
 });
 
+// Правило «только следующий по порядку» проверяет и сервер; здесь — для быстрой подсказки
 async function createLevel() {
     levelError.value = '';
-    
     if (!newLevelNumber.value) {
         levelError.value = 'Введите номер уровня';
         return;
     }
-    
-    const maxLevel = Math.max(...levels.value.map(l => l.level_number), 0);
-    if (newLevelNumber.value !== maxLevel + 1) {
-        levelError.value = `Нельзя создать уровень ${newLevelNumber.value}. Следующий уровень должен быть ${maxLevel + 1}`;
+    if (newLevelNumber.value !== maxLevelNumber.value + 1) {
+        levelError.value = `Нельзя создать уровень ${newLevelNumber.value}. Следующий уровень должен быть ${maxLevelNumber.value + 1}`;
         return;
     }
-    
     try {
         const createdLevelNumber = newLevelNumber.value;
         await tanksStore.createLevel({ level_number: createdLevelNumber });
         newLevelNumber.value = null;
         showSuccess('Уровень создан', `Уровень ${createdLevelNumber} успешно создан`);
     } catch (err) {
-        levelError.value = err.response?.data?.level_number?.[0] || 'Ошибка создания уровня';
-        showError('Ошибка', levelError.value);
+        levelError.value = getErrorMessage(err, 'Ошибка создания уровня');
     }
 }
 
-async function deleteLevel(id) {
-    const level = levels.value.find(l => l.id === id);
-    
-    if (level.level_number !== maxLevelNumber.value) {
-        showError('Ошибка', `Нельзя удалить уровень ${level.level_number}. Можно удалить только последний уровень (${maxLevelNumber.value}).`);
-        return;
-    }
-    
-    const result = await Swal.fire({
-        title: 'Удалить уровень?',
-        text: `Это удалит все танки ${level.level_number} уровня и вернёт владельцам полную стоимость (${level.creation_cost} кредитов за танк). Активные бои на этом уровне будут отменены, а история боёв этого уровня удалена!`,
-        icon: 'warning',
-        showCancelButton: true,
-        confirmButtonColor: '#dc3545',
-        cancelButtonColor: '#6c757d',
-        confirmButtonText: 'Да, удалить',
-        cancelButtonText: 'Отмена',
-        background: '#2c3e50',
-        color: '#fff'
-    });
-    
-    if (result.isConfirmed) {
-        try {
-            await tanksStore.deleteLevel(id);
-            await tanksStore.fetchMyTanks();
-            await userStore.checkLogin();
-            showSuccess('Уровень удалён', 'Уровень успешно удалён');
-        } catch (err) {
-            showError('Ошибка', err.response?.data?.error || 'Не удалось удалить уровень');
-        }
+// Кнопка удаления активна только у последнего уровня (то же правило на сервере)
+async function deleteLevel(level) {
+    const confirmed = await showConfirm(
+        'Удалить уровень?',
+        `Это удалит все танки ${level.level_number} уровня и вернёт владельцам полную стоимость (${level.creation_cost} кредитов за танк). Активные бои на этом уровне будут отменены, а история боёв этого уровня удалена!`
+    );
+    if (!confirmed) return;
+    try {
+        await tanksStore.deleteLevel(level.id);
+        await tanksStore.fetchMyTanks();
+        await userStore.checkLogin();
+        showSuccess('Уровень удалён', 'Уровень успешно удалён');
+    } catch (err) {
+        showError('Ошибка', getErrorMessage(err, 'Не удалось удалить уровень'));
     }
 }
-
-const maxLevelNumber = computed(() => {
-    if (!levels.value.length) return 0;
-    return Math.max(...levels.value.map(l => l.level_number));
-});
-
 </script>
 
 <template>
     <div class="custom-container">
-        <div v-if="userInfo && userInfo.is_authenticated && userInfo.is_staff">
+        <div v-if="userInfo.is_authenticated && userInfo.is_staff">
             <div class="custom-card mb-4">
                 <div class="custom-card-header bg-danger">Управление уровнями</div>
                 <div class="custom-card-body" v-if="userInfo.is_staff && userInfo.second">
@@ -101,7 +76,7 @@ const maxLevelNumber = computed(() => {
                         </div>
                     </div>
                     <div class="alert-custom-info mt-2">
-                        <small>Следующий уровень должен быть №{{ Math.max(...levels.map(l => l.level_number), 0) + 1 }}</small>
+                        <small>Следующий уровень должен быть №{{ maxLevelNumber + 1 }}</small>
                         <small class="d-block mt-1">💰 Стоимость создания и награда рассчитываются автоматически</small>
                     </div>
                 </div>
@@ -132,7 +107,7 @@ const maxLevelNumber = computed(() => {
                                 <td>{{ level.creation_cost }} 💰</td>
                                 <td>{{ level.battle_reward }} 💰</td>
                                 <td v-if="userInfo.second" class="action-buttons">
-                                    <button class="btn-custom-danger btn-sm" @click="deleteLevel(level.id)" 
+                                    <button class="btn-custom-danger btn-sm" @click="deleteLevel(level)" 
                                     :disabled="level.level_number !== maxLevelNumber">🗑️</button>
                                 </td>
                             </tr>
@@ -143,4 +118,4 @@ const maxLevelNumber = computed(() => {
         </div>
         <div v-else class="alert-custom-warning">Доступ только для администраторов</div>
     </div>
-</template>
+</template>

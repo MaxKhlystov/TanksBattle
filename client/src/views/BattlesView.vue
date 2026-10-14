@@ -1,83 +1,71 @@
 <script setup>
 import { onBeforeMount, ref, watch, inject, onUnmounted, computed } from 'vue';
-import axios from 'axios';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
 import { storeToRefs } from "pinia";
-import { showSuccess, showError } from '@/utils/notifications';
+import { showSuccess, showError, getErrorMessage } from '@/utils/notifications';
 
 const userStore = useUserStore();
 const tanksStore = useTanksStore();
 const openImageViewer = inject('openImageViewer');
 
 const { userInfo } = storeToRefs(userStore);
-const { myTanks, levels, battles } = storeToRefs(tanksStore); // +++ добавили battles
+const { myTanks, levels, battles } = storeToRefs(tanksStore);
 
 const selectedTankId = ref(null);
 const selectedBattleLevelId = ref(null);
-const availableLevels = ref([]);
+// Флаг «идёт запрос»: блокирует кнопку запуска и не даёт restoreBattlesState
+// пересоздавать таймеры, пока startBattleFor ещё не закончил работу
 const isProcessing = ref(false);
 
-const activeBattles = ref({});      
-const pendingResults = ref({});     
+const activeBattles = ref({});      // tankId -> { remaining, battleId, intervalId }
+const pendingResults = ref({});     // tankId -> { battleId } — бой окончен, награду можно забрать
 const claiming = ref({});
 
 const showResultModalFlag = ref(false);
 const currentBattleResult = ref(null);
 
-function getBattleByTank(tankId) {
-    return battles.value.find(b => b.tank === tankId && b.result === 'pending');
+function clearAllTimers() {
+    Object.values(activeBattles.value).forEach(battle => clearInterval(battle.intervalId));
 }
 
-async function restoreBattlesState() {
-    if (isProcessing.value) return;   
-    isProcessing.value = true;
-    try {
-        Object.values(activeBattles.value).forEach(battle => {
-            if (battle.intervalId) clearInterval(battle.intervalId);
-        });
-        activeBattles.value = {};
-        pendingResults.value = {};
-
-        for (const tank of myTanks.value) {
-            const battle = getBattleByTank(tank.id);
-            if (!battle) continue;
-
-            const duration = tank.level_number;
-            const startedAt = new Date(battle.started_at);
-            const now = new Date();
-            const elapsed = (now - startedAt) / 1000;
-            
-            if (elapsed >= duration) {
-                pendingResults.value[tank.id] = { battleId: battle.id };
-            } else {
-                const remaining = Math.ceil(duration - elapsed);
-                const intervalId = setInterval(() => {
-                    if (activeBattles.value[tank.id]) {
-                        const newRemaining = activeBattles.value[tank.id].remaining - 1;
-                        if (newRemaining <= 0) {
-                            clearInterval(intervalId);
-                            delete activeBattles.value[tank.id];
-                            pendingResults.value[tank.id] = { battleId: battle.id };
-                            tanksStore.fetchMyTanks();
-                        } else {
-                            activeBattles.value[tank.id].remaining = newRemaining;
-                        }
-                    }
-                }, 1000);
-                
-                activeBattles.value[tank.id] = {
-                    remaining: remaining,
-                    total: duration,
-                    battleId: battle.id,
-                    intervalId: intervalId
-                };
-            }
+// Локальный обратный отсчёт боя; по окончании танк переходит в «Забрать награду»
+function startCountdown(tankId, battleId, seconds) {
+    const intervalId = setInterval(() => {
+        const battle = activeBattles.value[tankId];
+        if (!battle) {
+            clearInterval(intervalId);
+            return;
         }
-    } catch (error) {
-        showError('Ошибка', error.response?.data?.error || 'Не удалось загрузить ангар');
-    } finally {
-        isProcessing.value = false;
+        battle.remaining -= 1;
+        if (battle.remaining <= 0) {
+            clearInterval(intervalId);
+            delete activeBattles.value[tankId];
+            pendingResults.value[tankId] = { battleId };
+            tanksStore.fetchMyTanks();
+        }
+    }, 1000);
+    activeBattles.value[tankId] = { remaining: seconds, battleId, intervalId };
+}
+
+// Восстанавливает таймеры по активным боям с сервера (после перезагрузки страницы)
+function restoreBattlesState() {
+    if (isProcessing.value) return;
+    clearAllTimers();
+    activeBattles.value = {};
+    pendingResults.value = {};
+
+    for (const tank of myTanks.value) {
+        const battle = battles.value.find(b => b.tank === tank.id && b.result === 'pending');
+        if (!battle) continue;
+
+        const duration = tank.level_number;  // длительность боя = уровень танка (секунды)
+        const elapsed = (Date.now() - new Date(battle.started_at)) / 1000;
+        if (elapsed >= duration) {
+            pendingResults.value[tank.id] = { battleId: battle.id };
+        } else {
+            startCountdown(tank.id, battle.id, Math.ceil(duration - elapsed));
+        }
     }
 }
 
@@ -89,61 +77,46 @@ const isSelectedTankInBattle = computed(() => {
 });
 
 const selectedTankRemainingTime = computed(() => {
-    if (!selectedTankId.value) return null;
-    const battle = activeBattles.value[selectedTankId.value];
-    return battle ? battle.remaining : null;
+    return activeBattles.value[selectedTankId.value]?.remaining ?? null;
 });
 
+// Уровни боя, доступные выбранному танку: его уровень и соседние (±1), как на сервере
+const availableLevels = computed(() => {
+    const tank = myTanks.value.find(t => t.id === selectedTankId.value);
+    if (!tank) return [];
+    return levels.value.filter(level => Math.abs(level.level_number - tank.level_number) <= 1);
+});
+
+// Запуск боя из формы: танк и уровень берутся из выбранных значений
 async function startBattle() {
     if (!selectedTankId.value || !selectedBattleLevelId.value) {
         showError('Ошибка', 'Выберите танк и уровень боя');
         return;
     }
-    if (isSelectedTankInBattle.value) {
+    await startBattleFor(selectedTankId.value, selectedBattleLevelId.value);
+}
+
+// Запуск боя для конкретного танка (используется и формой, и кнопкой «Повтор»)
+async function startBattleFor(tankId, battleLevelId) {
+    const tank = myTanks.value.find(t => t.id === tankId);
+    if (!tank) {
+        showError('Ошибка', 'Танк не найден');
+        return;
+    }
+    if (tank.is_in_battle || activeBattles.value[tankId]) {
         showError('Ошибка', 'Этот танк уже участвует в бою! Дождитесь окончания.');
         return;
     }
-    
-    const tankId = selectedTankId.value;
-    const battleLevelId = selectedBattleLevelId.value;
-    const tank = myTanks.value.find(t => t.id === tankId);
-    
+
     isProcessing.value = true;
-    
     try {
-        const result = await tanksStore.startBattle(tankId, battleLevelId);
-        const duration = result.battleDuration || tank?.level_number;
-        
-        let remaining = duration;
-        const timerId = setInterval(() => {
-            remaining--;
-            if (activeBattles.value[tankId]) {
-                activeBattles.value[tankId].remaining = remaining;
-            }
-            if (remaining <= 0) {
-                clearInterval(timerId);
-                if (activeBattles.value[tankId]) {
-                    const battleId = activeBattles.value[tankId].battleId;
-                    delete activeBattles.value[tankId];
-                    pendingResults.value[tankId] = { battleId };
-                    tanksStore.fetchMyTanks();
-                }
-            }
-        }, 1000);
-        
-        activeBattles.value[tankId] = {
-            remaining: duration,
-            total: duration,
-            battleId: result.battleId,
-            intervalId: timerId
-        };
-        
+        const battle = await tanksStore.startBattle(tankId, battleLevelId);
+        startCountdown(tankId, battle.id, battle.battle_duration);
         await tanksStore.fetchMyTanks();
-        await tanksStore.fetchBattles(); 
+        await tanksStore.fetchBattles();
         showSuccess('Бой начался!', 'Танк отправлен в бой');
-        
     } catch (error) {
-        showError('Ошибка', error.response?.data?.error || 'Не удалось начать бой');
+        showError('Ошибка', getErrorMessage(error, 'Не удалось начать бой'));
     } finally {
         isProcessing.value = false;
     }
@@ -153,13 +126,13 @@ async function claimReward(tankId) {
     const pending = pendingResults.value[tankId];
     if (!pending || claiming.value[tankId]) return;
     claiming.value[tankId] = true;
-    
+
     try {
-        const result = await tanksStore.claimBattle(pending.battleId);
-        showResultModal(result);
+        currentBattleResult.value = await tanksStore.claimBattle(pending.battleId);
+        showResultModalFlag.value = true;
         delete pendingResults.value[tankId];
     } catch (error) {
-        showError('Ошибка', error.response?.data?.error || 'Не удалось получить результат боя');
+        showError('Ошибка', getErrorMessage(error, 'Не удалось получить результат боя'));
         await tanksStore.fetchMyTanks();
         await tanksStore.fetchBattles();
     } finally {
@@ -170,25 +143,16 @@ async function claimReward(tankId) {
 async function cancelBattle(tankId) {
     const battle = activeBattles.value[tankId];
     if (!battle) return;
-    
+
     clearInterval(battle.intervalId);
-    
+    delete activeBattles.value[tankId];
     try {
-        await axios.post(`/api/battles/${battle.battleId}/cancel/`);
-        delete activeBattles.value[tankId];
-        await tanksStore.fetchMyTanks();
-        await tanksStore.fetchBattles();
+        await tanksStore.cancelBattle(battle.battleId);
         showSuccess('Бой отменён', 'Танк вернулся в ангар');
     } catch (error) {
-        showError('Ошибка', 'Не удалось отменить бой');
+        showError('Ошибка', getErrorMessage(error, 'Не удалось отменить бой'));
         await tanksStore.fetchMyTanks();
-        delete activeBattles.value[tankId];
     }
-}
-
-function showResultModal(result) {
-    currentBattleResult.value = result;
-    showResultModalFlag.value = true;
 }
 
 function closeResultModal() {
@@ -196,67 +160,44 @@ function closeResultModal() {
     currentBattleResult.value = null;
 }
 
-onUnmounted(() => {
-    Object.values(activeBattles.value).forEach(battle => {
-        if (battle.intervalId) clearInterval(battle.intervalId);
-    });
-});
-
-function updateAvailableLevels() {
-    const tank = myTanks.value.find(t => t.id === selectedTankId.value);
-    if (!tank || !levels.value.length) {
-        availableLevels.value = [];
-        return;
-    }
-    const tankLevel = tanksStore.getLevelInfo(tank.level);
-    if (!tankLevel) return;
-    const tankLevelNum = tankLevel.level_number;
-    availableLevels.value = levels.value.filter(level => {
-        const diff = Math.abs(level.level_number - tankLevelNum);
-        return diff <= 1;
-    });
-}
+onUnmounted(clearAllTimers);
 
 function getWinChance(tankId, battleLevelId) {
     const tank = myTanks.value.find(t => t.id === tankId);
     const battleLevel = tanksStore.getLevelInfo(battleLevelId);
     if (!tank || !battleLevel) return 0;
-    const tankLevel = tanksStore.getLevelInfo(tank.level);
-    if (!tankLevel) return 0;
-    const tankLevelNum = tankLevel.level_number;
-    const battleLevelNum = battleLevel.level_number;
-    if (battleLevelNum < tankLevelNum) return 100;
-    if (battleLevelNum === tankLevelNum) return 75;
+    // те же правила, что в claim_battle на сервере
+    if (battleLevel.level_number < tank.level_number) return 100;
+    if (battleLevel.level_number === tank.level_number) return 75;
     return 25;
 }
 
+// «Повтор»: тот же танк и тот же уровень боя, что в только что завершённом бою
 function repeatBattle() {
+    const result = currentBattleResult.value;
     showResultModalFlag.value = false;
-    if (selectedTankId.value && selectedBattleLevelId.value) {
-        startBattle();
+    if (result?.tank && result?.battle_level) {
+        startBattleFor(result.tank, result.battle_level);
     }
 }
 
 watch(selectedTankId, () => {
     selectedBattleLevelId.value = null;
-    updateAvailableLevels();
 });
 
-watch([myTanks, battles], async () => {
-    await restoreBattlesState();
-}, { deep: true });
+watch([myTanks, battles], restoreBattlesState, { deep: true });
 
 onBeforeMount(async () => {
     await tanksStore.fetchMyTanks();
     await tanksStore.fetchLevels();
-    await tanksStore.fetchBattles(); 
-    await restoreBattlesState();     
+    await tanksStore.fetchBattles();
+    restoreBattlesState();
 });
 </script>
 
 <template>
     <div class="custom-container">
-        <div v-if="userInfo && userInfo.is_authenticated">
+        <div v-if="userInfo.is_authenticated">
             <div class="row">
                 <div class="col-md-6">
                     <div class="custom-card">
@@ -275,7 +216,7 @@ onBeforeMount(async () => {
                                         <option :value="null" disabled>Выберите танк</option>
                                         <option :value="tank.id" v-for="tank in myTanks" :key="tank.id" 
                                             :disabled="tank.is_in_battle || activeBattles[tank.id]">
-                                            {{ tank.name }} (Lv.{{ tanksStore.getLevelInfo(tank.level)?.level_number }})
+                                            {{ tank.name }} (Lv.{{ tank.level_number }})
                                             {{ tank.is_in_battle || activeBattles[tank.id] ? '- В БОЮ' : '' }}
                                         </option>
                                     </select>
@@ -317,7 +258,7 @@ onBeforeMount(async () => {
                                     <div v-else style="width: 40px; height: 40px; background: #555; border-radius: 8px; margin-right: 10px;"></div>
                                     <div>
                                         <strong>{{ tank.name }}</strong>
-                                        <span class="badge" style="background:#dc3545; margin-left:8px;">Lv.{{ tanksStore.getLevelInfo(tank.level)?.level_number }}</span>
+                                        <span class="badge" style="background:#dc3545; margin-left:8px;">Lv.{{ tank.level_number }}</span>
                                     </div>
                                 </div>
                                 <div>
@@ -369,4 +310,4 @@ onBeforeMount(async () => {
             </div>
         </div>
     </div>
-</template>
+</template>

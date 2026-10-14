@@ -1,50 +1,29 @@
 <script setup>
 import { ref, onBeforeMount } from 'vue';
-import axios from 'axios';
 import { useUserStore } from '@/stores/user_store';
+import { useTanksStore } from '@/stores/tanks_store';
 import { storeToRefs } from 'pinia';
+import { showSuccess, showError, getErrorMessage } from '@/utils/notifications';
 
 const userStore = useUserStore();
+const tanksStore = useTanksStore();
 const { userInfo } = storeToRefs(userStore);
-const crewmen = ref([]);
+const { allCrewmen } = storeToRefs(tanksStore);
 const loading = ref(false);
-const message = ref('');
-const messageIsError = ref(false);
 
+// Доступ проверяет роутер (requiresStaff + requires2FA)
 onBeforeMount(async () => {
-    if (userInfo.value.is_staff && userInfo.value.second) {
-        await loadCrewmen();
-    }
-});
-
-async function loadCrewmen() {
     loading.value = true;
-    try {
-        const response = await axios.get('/api/crewman/list-users/');
-        crewmen.value = response.data;
-    } catch (error) {
-        console.error('Ошибка загрузки пользователей:', error);
-        messageIsError.value = true;
-        message.value = 'Ошибка загрузки';
-    } finally {
-        loading.value = false;
-    }
-}
+    await tanksStore.fetchAllCrewmen();
+    loading.value = false;
+});
 
 async function updateCrewman(crewman) {
     try {
-        await axios.put(`/api/crewman/${crewman.id}/`, {
-            credits: crewman.credits,
-            garage_slots: crewman.garage_slots
-        });
-        messageIsError.value = false;
-        message.value = `Пользователь ${crewman.username} обновлён`;
-        setTimeout(() => { message.value = ''; }, 3000);
+        await tanksStore.updateCrewman(crewman);
+        showSuccess('Сохранено', `Пользователь ${crewman.username} обновлён`);
     } catch (error) {
-        console.error('Ошибка обновления:', error);
-        const data = error.response?.data;
-        messageIsError.value = true;
-        message.value = data?.error || data?.credits?.[0] || data?.garage_slots?.[0] || 'Ошибка при обновлении';
+        showError('Ошибка', getErrorMessage(error, 'Ошибка при обновлении'));
     }
 }
 </script>
@@ -55,7 +34,6 @@ async function updateCrewman(crewman) {
             <div class="custom-card">
                 <div class="custom-card-header bg-danger">Управление пользователями</div>
                 <div class="custom-card-body">
-                    <div v-if="message" :class="messageIsError ? 'alert-custom-danger' : 'alert-custom-success'">{{ message }}</div>
                     <div v-if="loading" class="text-center">Загрузка...</div>
                     <table class="custom-table" v-else>
                         <thead>
@@ -69,7 +47,7 @@ async function updateCrewman(crewman) {
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="c in crewmen" :key="c.id">
+                            <tr v-for="c in allCrewmen" :key="c.id">
                                 <td>{{ c.id }}</td>
                                 <td>{{ c.username }}</td>
                                 <td>
@@ -95,4 +73,4 @@ async function updateCrewman(crewman) {
             Доступ только для администраторов
         </div>
     </div>
-</template>
+</template>

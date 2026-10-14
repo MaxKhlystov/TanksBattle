@@ -6,7 +6,7 @@ import { useTanksStore } from '@/stores/tanks_store';
 import { storeToRefs } from "pinia";
 import { useRouter } from 'vue-router'
 import ImageViewer from '@/views/ImageViewer.vue';
-import { showSuccess, showError, showInfo } from '@/utils/notifications';
+import { showSuccess, showError } from '@/utils/notifications';
 
 const userStore = useUserStore();
 const tanksStore = useTanksStore();
@@ -19,7 +19,6 @@ const showRegisterModal = ref(false);
 const show2FAModal = ref(false);
 const twoFACode = ref('');
 const qrcodeUrl = ref('');
-const totpUrl = ref('');
 
 const loginUsername = ref('');
 const loginPassword = ref('');
@@ -40,20 +39,18 @@ provide('openImageViewer', (url) => {
 
 async function getTotpKey() {
     try {
-        let r = await axios.get('/api/user/get-totp/');
+        const r = await axios.get('/api/user/get-totp/');
         if (r.data.url) {
-            totpUrl.value = r.data.url;
             const QRCode = (await import('qrcode')).default;
-            qrcodeUrl.value = await QRCode.toDataURL(totpUrl.value);
+            qrcodeUrl.value = await QRCode.toDataURL(r.data.url);
         } else {
             // 2FA уже привязана: секрет повторно не выдаётся, нужен только код
-            totpUrl.value = '';
             qrcodeUrl.value = '';
         }
         show2FAModal.value = true;
     } catch (error) {
         console.error(error);
-        alert('Ошибка получения QR-кода');
+        showError('Ошибка', 'Не удалось получить QR-код');
     }
 }
 
@@ -69,6 +66,7 @@ async function verify2FA() {
     }
 }
 
+// Данные ангара после входа загружает GarageView (watch на is_authenticated)
 async function handleLogin() {
     loginError.value = '';
     try {
@@ -77,14 +75,6 @@ async function handleLogin() {
             showLoginModal.value = false;
             loginUsername.value = '';
             loginPassword.value = '';
-            
-            await tanksStore.fetchMyTanks();
-            await tanksStore.fetchLevels();
-            await tanksStore.fetchNations();
-            await tanksStore.fetchBattles();
-            if (userInfo.value.is_staff && userInfo.value.second) {
-                await tanksStore.fetchAllCrewmen();
-            }
         }
     } catch (error) {
         loginError.value = 'Неверное имя пользователя или пароль';
@@ -115,21 +105,17 @@ async function handleRegister() {
     }
 }
 
+// logout на сервере очищает всю сессию, включая отметку 2FA
 async function handleLogout() {
-    try {
-        await axios.post('/api/user/logout-2fa/');
-    } catch (error) {
-        console.error('Error resetting 2FA:', error);
-    }
     await userStore.logout();
-    tanksStore.resetStore();           
+    tanksStore.resetStore();
     sessionStorage.removeItem('selectedUserId');
     showDropdown.value = false;
     router.push('/');
 }
 
-onBeforeMount(async () => {
-    userStore.checkLogin();
+// Данные пользователя загружает router.beforeEach, здесь — только справочники
+onBeforeMount(() => {
     tanksStore.fetchNations();
     tanksStore.fetchLevels();
 });
@@ -139,21 +125,19 @@ onBeforeMount(async () => {
     <nav class="custom-navbar">
         <div class="custom-container">
             <div class="navbar-content">
-                <button class="navbar-toggler" @click="showNav = !showNav">
-                    <span class="navbar-toggler-icon"></span>
-                </button>
+                <button class="navbar-toggler" @click="showNav = !showNav">☰</button>
                 <div class="navbar-links" :class="{ show: showNav }">
                     <ul class="nav-list">
-                        <li v-if="userInfo && userInfo.is_authenticated">
+                        <li v-if="userInfo.is_authenticated">
                             <router-link class="nav-link" to="/">Ангар</router-link>
                         </li>
-                        <li v-if="userInfo && userInfo.is_authenticated">
+                        <li v-if="userInfo.is_authenticated">
                             <router-link class="nav-link" to="/tanks">Создать танк</router-link>
                         </li>
-                        <li v-if="userInfo && userInfo.is_authenticated">
+                        <li v-if="userInfo.is_authenticated">
                             <router-link class="nav-link" to="/battles">Сражения</router-link>
                         </li>
-                        <li v-if="userInfo && userInfo.is_authenticated">
+                        <li v-if="userInfo.is_authenticated">
                             <router-link class="nav-link" to="/battle-history">История</router-link>
                         </li>
                         <li v-if="userInfo.is_staff">
@@ -170,27 +154,29 @@ onBeforeMount(async () => {
                         </li>
                     </ul>
                     <ul class="nav-list ms-auto">
-                        <li v-if="userInfo && userInfo.is_authenticated && userInfo.is_staff && !userInfo.second">
+                        <li v-if="userInfo.is_authenticated && userInfo.is_staff && !userInfo.second">
                             <button class="btn-custom-warning" @click="getTotpKey">
                                 🔐 2FA
                             </button>
                         </li>
-                        <li v-if="userInfo && userInfo.is_authenticated && userInfo.second">
+                        <li v-if="userInfo.is_authenticated && userInfo.second">
                             <span class="badge-2fa-active">2FA</span>
                         </li>
-                        <li v-if="!userInfo || !userInfo.is_authenticated">
+                        <li v-if="!userInfo.is_authenticated">
                             <button class="btn-custom-primary" @click="showLoginModal = true">Вход</button>
                         </li>
-                        <li v-if="!userInfo || !userInfo.is_authenticated">
+                        <li v-if="!userInfo.is_authenticated">
                             <button class="btn-custom-danger" @click="showRegisterModal = true">Регистрация</button>
                         </li>
-                        <li class="dropdown" v-if="userInfo && userInfo.is_authenticated">
+                        <li class="dropdown" :class="{ open: showDropdown }" v-if="userInfo.is_authenticated">
                             <a class="nav-link dropdown-toggle" href="#" @click.prevent="showDropdown = !showDropdown">
                                 {{ userInfo.username }}
                             </a>
                             <ul class="dropdown-menu-custom" v-if="showDropdown">
-                                <li><a href="/admin">Админка</a></li>
-                                <li><hr style="margin: 5px 0;"></li>
+                                <template v-if="userInfo.is_staff">
+                                    <li><a href="/admin">Админка</a></li>
+                                    <li><hr style="margin: 5px 0;"></li>
+                                </template>
                                 <li><a href="#" @click="handleLogout">Выйти</a></li>
                             </ul>
                         </li>
@@ -290,7 +276,3 @@ onBeforeMount(async () => {
         </div>
     </div>
 </template>
-
-<style scoped>
-
-</style>

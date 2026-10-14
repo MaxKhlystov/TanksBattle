@@ -31,10 +31,20 @@ def clear_2fa(request):
     request.session.pop(SECOND_FACTOR_SESSION_KEY, None)
 
 
+def is_staff_with_2fa(request):
+    """Сотрудник (is_staff) с подтверждённой 2FA: видит и меняет данные всех игроков."""
+    return request.user.is_staff and has_2fa(request)
+
+
 class IsStaffAnd2FAVerified(permissions.BasePermission):
     def has_permission(self, request, view):
-        if not request.user.is_authenticated:
-            return False
-        if not request.user.is_staff:
-            return False
-        return has_2fa(request)
+        return is_staff_with_2fa(request)
+
+
+class IsStaffAnd2FAOrReadOnly(IsStaffAnd2FAVerified):
+    """Чтение — всем, изменение — только сотрудникам с подтверждённой 2FA."""
+
+    def has_permission(self, request, view):
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return super().has_permission(request, view)

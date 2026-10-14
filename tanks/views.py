@@ -3,7 +3,7 @@ from django.db.models import Count, F
 from django.views.generic import TemplateView
 
 from .models import Nation, Level, Crewman, Tank, BattleRecord
-from .permissions import has_2fa
+from .permissions import is_staff_with_2fa
 
 
 class AllDataView(UserPassesTestMixin, TemplateView):
@@ -11,8 +11,7 @@ class AllDataView(UserPassesTestMixin, TemplateView):
     raise_exception = True
 
     def test_func(self):
-        user = self.request.user
-        return user.is_authenticated and user.is_staff and has_2fa(self.request)
+        return is_staff_with_2fa(self.request)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -25,4 +24,4 @@ class AllDataView(UserPassesTestMixin, TemplateView):
         context['battles'] = BattleRecord.objects.select_related(
             'tank', 'crewman__user', 'battle_level'
         )
-        return context
+        return context

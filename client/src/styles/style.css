@@ -8,10 +8,8 @@ html {
     overflow-x: hidden;
 }
 
+/* фон страницы задаёт .bg__own (App.vue) */
 body {
-    background-image: url('/bg.webp');
-    background-size: cover;
-    background-attachment: fixed;
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     overflow-x: hidden;
 }
@@ -49,9 +47,6 @@ body {
     margin: 0;
     padding: 0;
 }
-.nav-list li {
-    list-style: none;
-}
 .nav-link {
     color: #fff;
     text-decoration: none;
@@ -73,6 +68,15 @@ body {
     position: relative;
 }
 .dropdown-toggle {
+    cursor: pointer;
+}
+/* кнопка меню показывается только на узких экранах (см. @media max-width: 768px) */
+.navbar-toggler {
+    display: none;
+    background: none;
+    border: none;
+    color: #fff;
+    font-size: 26px;
     cursor: pointer;
 }
 
@@ -336,9 +340,6 @@ body {
     padding: 5px 12px;
     font-size: 14px;
 }
-.flex-grow-1 {
-    flex: 1;
-}
 .alert-custom-warning {
     background-color: #ffc107;
     color: #212529;
@@ -348,13 +349,6 @@ body {
 }
 .alert-custom-danger {
     background-color: #dc3545;
-    color: #fff;
-    padding: 12px;
-    border-radius: 8px;
-    margin-bottom: 15px;
-}
-.alert-custom-success {
-    background-color: #28a745;
     color: #fff;
     padding: 12px;
     border-radius: 8px;
@@ -394,14 +388,13 @@ body {
     flex-wrap: wrap;
     margin: 0 -10px;
 }
-.col-md-3, .col-md-4, .col-md-6, .col-md-12 {
+.col-md-3, .col-md-4, .col-md-6 {
     padding: 0 10px;
     margin-bottom: 20px;
 }
 .col-md-3 { width: 25%; }
 .col-md-4 { width: 33.333%; }
 .col-md-6 { width: 50%; }
-.col-md-12 { width: 100%; }
 @media (max-width: 768px) {
     .col-md-3, .col-md-4, .col-md-6 {
         width: 100%;
@@ -420,18 +413,15 @@ body {
 .bg-info { background-color: #17a2b8; }
 .mt-2 { margin-top: 10px; }
 .mt-3 { margin-top: 15px; }
-.mt-4 { margin-top: 20px; }
 .mb-0 { margin-bottom: 0; }
 .mb-2 { margin-bottom: 10px; }
 .mb-3 { margin-bottom: 15px; }
 .mb-4 { margin-bottom: 20px; }
-.p-3 { padding: 15px; }
 .p-5 { padding: 30px; }
 .d-flex { display: flex; }
 .justify-content-between { justify-content: space-between; }
 .align-items-center { align-items: center; }
 .gap-2 { gap: 10px; }
-.flex-wrap { flex-wrap: wrap; }
 .w-100 { width: 100%; }
 .opacity-50 { opacity: 0.6; }
 
@@ -446,8 +436,9 @@ body {
     background-size: cover;
     background-position: center;
 }
-.stats-title {
-    color: #ffffff !important;
+.stats-title,
+.tanks-title {
+    color: #ffffff;
     text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
 }
 
@@ -489,18 +480,6 @@ body {
     align-items: center;
     justify-content: center;
     font-size: 60px;
-    cursor: pointer;
-}
-.tanks-title {
-    color: #ffffff;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
-}
-
-.tank-actions {
-    display: flex;
-    gap: 10px;
-    margin-top: 15px;
-    justify-content: center;
 }
 
 .btn-action {
@@ -533,4 +512,4 @@ body {
 .btn-edit {
     background-color: #007bff;
     color: white;
-}
+}

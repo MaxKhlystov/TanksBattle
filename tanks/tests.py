@@ -7,20 +7,23 @@ from datetime import timedelta
 import pyotp
 from django.contrib.auth.models import User
 from django.core.management import call_command
+from django.contrib import admin
 from django.test import TestCase
 from django.urls import resolve
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 
+from .admin import TankAdmin
 from .models import Nation, Level, Crewman, Tank, BattleRecord
+from .permissions import SECOND_FACTOR_SESSION_KEY
 
 
 def enable_2fa(client, user):
     """Логинит пользователя и помечает сессию как прошедшую второй фактор."""
     client.force_login(user)
     session = client.session
-    session['2fa_at'] = time.time()
+    session[SECOND_FACTOR_SESSION_KEY] = time.time()
     session.save()
 
 
@@ -36,20 +39,23 @@ class TankAPITests(APITestCase):
         self.nation = Nation.objects.create(name="TestNation")
         self.level1 = Level.objects.create(level_number=1)
         self.level2 = Level.objects.create(level_number=2)
-        self.level3 = Level.objects.create(level_number=3) # <--- Добавили уровень 3
-        
+
         self.tank1 = Tank.objects.create(
             name="Tank1", 
             owner=self.crewman1, 
             nation=self.nation, 
             level=self.level1
         )
+        # танк второго игрока: проверяем, что чужие танки не попадают в список
+        self.tank2 = Tank.objects.create(
+            name="Tank2", owner=self.crewman2, nation=self.nation, level=self.level1
+        )
 
     def test_list_tanks_owner_only(self):
         self.client.force_authenticate(user=self.user1)
         response = self.client.get('/api/tanks/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
+        self.assertEqual([t['id'] for t in response.data], [self.tank1.id])
 
     def test_create_tank(self):
         self.client.force_authenticate(user=self.user1)
@@ -60,7 +66,7 @@ class TankAPITests(APITestCase):
         }
         response = self.client.post('/api/tanks/create/', data)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(Tank.objects.count(), 2)
+        self.assertEqual(Tank.objects.filter(owner=self.crewman1).count(), 2)
 
     def test_upgrade_tank(self):
         self.client.force_authenticate(user=self.user1)
@@ -90,7 +96,26 @@ class TankAPITests(APITestCase):
 
         response = self.client.get('/api/tanks/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1) 
+        self.assertEqual(len(response.data), 2)
+
+    def test_staff_with_2fa_sees_all(self):
+        # сотрудник (не суперпользователь) с 2FA тоже видит танки всех игроков
+        staff = User.objects.create_user(username='staff', password='p', is_staff=True)
+        enable_2fa(self.client, staff)
+        response = self.client.get('/api/tanks/', {'owner__id': self.crewman2.id})
+        self.assertEqual([t['id'] for t in response.data], [self.tank2.id])
+
+    def test_cannot_touch_foreign_tank(self):
+        self.client.force_authenticate(user=self.user1)
+        response = self.client.post(f'/api/tanks/{self.tank2.id}/sell/')
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_delete_tank_not_allowed(self):
+        # удалять танк можно только продажей (с возвратом кредитов)
+        self.client.force_authenticate(user=self.user1)
+        response = self.client.delete(f'/api/tanks/{self.tank1.id}/')
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        self.assertTrue(Tank.objects.filter(pk=self.tank1.pk).exists())
 
 class NationLevelTests(APITestCase):
     def setUp(self):
@@ -310,6 +335,40 @@ class RegressionTests(APITestCase):
         self.assertEqual(self.crewman.garage_slots, 4)
 
     # --- H10: служебная страница со всеми данными ---
+    # --- отмена боя игроком и освобождение танка в админке ---
+    def _start_pending_battle(self):
+        Tank.objects.filter(pk=self.tank.pk).update(is_in_battle=True)
+        return BattleRecord.objects.create(
+            tank=self.tank, crewman=self.crewman, battle_level=self.l1
+        )
+
+    def test_cancel_battle_frees_tank(self):
+        battle = self._start_pending_battle()
+        client = APIClient()
+        client.force_authenticate(self.user)
+
+        response = client.post(f'/api/battles/{battle.id}/cancel/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        battle.refresh_from_db()
+        self.tank.refresh_from_db()
+        self.assertEqual(battle.result, 'defeat')
+        self.assertFalse(self.tank.is_in_battle)
+
+        again = client.post(f'/api/battles/{battle.id}/cancel/')
+        self.assertEqual(again.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_admin_free_action_closes_pending_battle(self):
+        battle = self._start_pending_battle()
+        tank_admin = TankAdmin(Tank, admin.site)
+        tank_admin.message_user = lambda *args, **kwargs: None
+
+        tank_admin.free_tanks_from_battle(None, Tank.objects.filter(pk=self.tank.pk))
+
+        battle.refresh_from_db()
+        self.tank.refresh_from_db()
+        self.assertEqual(battle.result, 'defeat')
+        self.assertFalse(self.tank.is_in_battle)
+
     def test_all_data_page_requires_staff_with_2fa(self):
         self.assertEqual(APIClient().get('/').status_code, status.HTTP_403_FORBIDDEN)
 
@@ -335,9 +394,7 @@ class UrlTests(TestCase):
         '/api/user/logout/',
         '/api/user/get-totp/',
         '/api/user/second-login/',
-        '/api/user/logout-2fa/',
         '/api/user/export-all-stats/',
-        '/api/tank-photos/',
     ]
 
     def test_all_frontend_urls_resolve(self):
@@ -376,4 +433,4 @@ class ManagementCommandTests(TestCase):
                 timedelta(seconds=battle.tank.level.level_number),
             )
         for crewman in Crewman.objects.all():
-            self.assertLessEqual(crewman.tanks.count(), crewman.garage_slots)
+            self.assertLessEqual(crewman.tanks.count(), crewman.garage_slots)

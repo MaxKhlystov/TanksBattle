@@ -4,9 +4,6 @@ pytest-django==4.11.1
 faker==37.12.0
 openpyxl==3.1.5
 pyotp==2.9.0
-django==5.2.5
 django-filter
 django-cors-headers
 Pillow
-qrcode
-openpyxl

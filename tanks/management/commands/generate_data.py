@@ -52,9 +52,6 @@ class Command(BaseCommand):
             password = 'testpass123'
 
             user = User.objects.create_user(username=username, email=email, password=password)
-            user.is_staff = False
-            user.is_superuser = False
-            user.save()
 
             credits = random.randint(5000, 50000)
             garage_slots = random.randint(5, 15)
@@ -80,7 +77,7 @@ class Command(BaseCommand):
         slots_left = {c.id: c.garage_slots for c in crewmen_list}
 
         tanks_created = 0
-        for i in range(tanks_total):
+        for _ in range(tanks_total):
             candidates = [c for c in crewmen_list if slots_left[c.id] > 0]
             if not candidates:
                 self.stdout.write(self.style.WARNING('  Нет свободных мест в ангарах, остановка'))
@@ -96,8 +93,6 @@ class Command(BaseCommand):
                 owner=crewman,
                 nation=nation,
                 level=level,
-                is_in_battle=False,
-                picture=None
             )
             tanks_created += 1
             if tanks_created % 200 == 0:
@@ -107,10 +102,12 @@ class Command(BaseCommand):
 
         self.stdout.write(f'Creating {battles_total} battle records...')
         all_tanks = list(Tank.objects.select_related('level'))
+        if not all_tanks:
+            battles_total = 0  # без танков бои создавать не из чего
         battles_created = 0
         rewards = {}
 
-        for i in range(battles_total):
+        for _ in range(battles_total):
             tank = random.choice(all_tanks)
             tank_level = tank.level.level_number
             # Как в игре: бой доступен на уровнях танка -1, 0, +1
@@ -156,4 +153,4 @@ class Command(BaseCommand):
         self.stdout.write(f'Обычные пользователи: {Crewman.objects.exclude(user__is_superuser=True).count()}')
         self.stdout.write(f'Танки: {Tank.objects.count()}')
         self.stdout.write(f'Записи о боях: {BattleRecord.objects.count()}')
-        self.stdout.write('='*50)
+        self.stdout.write('='*50)

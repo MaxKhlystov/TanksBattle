@@ -1,5 +1,5 @@
 <script setup>
-import { onBeforeMount, ref, watch, computed } from 'vue';
+import { onBeforeMount, ref, computed } from 'vue';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
 import { storeToRefs } from "pinia";
@@ -11,7 +11,11 @@ const { userInfo } = storeToRefs(userStore);
 const { battles } = storeToRefs(tanksStore);
 
 const filterResult = ref('all');
-const filteredBattles = ref([]);
+
+const filteredBattles = computed(() => {
+    if (filterResult.value === 'all') return battles.value;
+    return battles.value.filter(b => b.result === filterResult.value);
+});
 
 const totalWins = computed(() => {
     return battles.value.filter(b => b.result === 'victory').length;
@@ -25,19 +29,17 @@ const totalEarned = computed(() => {
     return battles.value.reduce((sum, b) => sum + (b.reward_earned || 0), 0);
 });
 
+// Как на сервере (battle_stats): только завершённые бои, округление до десятых
 const winRate = computed(() => {
     const finished = totalWins.value + totalDefeats.value;
     if (finished === 0) return 0;
-    return Math.round((totalWins.value / finished) * 100);
+    return Math.round((totalWins.value / finished) * 1000) / 10;
 });
 
 onBeforeMount(async () => {
+    // Фильтр по crewman нужен администратору с 2FA: иначе сервер вернёт бои всех игроков
     const crewmanId = userInfo.value.crewman_id;
-    if (crewmanId) {
-        await tanksStore.fetchBattlesByUser(crewmanId);
-    } else {
-        await tanksStore.fetchBattles();
-    }
+    await tanksStore.fetchBattles(crewmanId ? { crewman: crewmanId } : {});
 });
 
 function getResultText(result) {
@@ -61,21 +63,11 @@ function formatDate(dateString) {
     const date = new Date(dateString);
     return date.toLocaleString('ru-RU');
 }
-
-function applyFilters() {
-    let result = [...battles.value];
-    if (filterResult.value !== 'all') {
-        result = result.filter(b => b.result === filterResult.value);
-    }
-    filteredBattles.value = result;
-}
-
-watch([battles, filterResult], () => applyFilters(), { deep: true, immediate: true });
 </script>
 
 <template>
     <div class="custom-container">
-        <div v-if="userInfo && userInfo.is_authenticated">
+        <div v-if="userInfo.is_authenticated">
             <div class="row mb-4">
                 <div class="col-md-3">
                     <div class="custom-card bg-primary text-white text-center">
@@ -146,4 +138,4 @@ watch([battles, filterResult], () => applyFilters(), { deep: true, immediate: tr
         </div>
         <div v-else class="alert-custom-warning">Пожалуйста, авторизуйтесь</div>
     </div>
-</template>
+</template>

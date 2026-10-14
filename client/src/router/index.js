@@ -17,8 +17,8 @@ const router = createRouter({
         { path: '/tanks', component: TanksView, meta: { requiresAuth: true } },
         { path: '/battles', component: BattlesView, meta: { requiresAuth: true } },
         { path: '/battle-history', component: BattleHistoryView, meta: { requiresAuth: true } },
-        { path: '/levels', component: LevelsView, meta: { requiresAuth: true, requiresStaff: true, requires2FAForEdit: true } },
-        { path: '/nations', component: NationsView, meta: { requiresAuth: true, requiresStaff: true, requires2FAForEdit: true } },
+        { path: '/levels', component: LevelsView, meta: { requiresAuth: true, requiresStaff: true } },
+        { path: '/nations', component: NationsView, meta: { requiresAuth: true, requiresStaff: true } },
         { path: '/stats', component: StatsView, meta: { requiresAuth: true, requiresStaff: true } },
         { path: '/crewmen', component: CrewmanView, meta: { requiresAuth: true, requiresStaff: true, requires2FA: true } }
     ]
