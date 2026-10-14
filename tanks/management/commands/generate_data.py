@@ -2,6 +2,8 @@ import random
 from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.contrib.auth.models import User
+from django.db.models import F
+from django.utils import timezone
 from faker import Faker
 
 from tanks.models import Nation, Level, Crewman, Tank, BattleRecord
@@ -74,9 +76,17 @@ class Command(BaseCommand):
             'Strv 103', 'Ariete', 'PT-91 Twardy'
         ]
 
+        # Не выдаём танков больше, чем мест в ангаре у игрока
+        slots_left = {c.id: c.garage_slots for c in crewmen_list}
+
         tanks_created = 0
         for i in range(tanks_total):
-            crewman = random.choice(crewmen_list)
+            candidates = [c for c in crewmen_list if slots_left[c.id] > 0]
+            if not candidates:
+                self.stdout.write(self.style.WARNING('  Нет свободных мест в ангарах, остановка'))
+                break
+            crewman = random.choice(candidates)
+            slots_left[crewman.id] -= 1
             name = random.choice(tank_names_pool) + f' {random.randint(1, 99)}'
             nation = random.choice(nations)
             level = random.choice(levels)
@@ -96,30 +106,45 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f'✓ Created {tanks_created} tanks'))
 
         self.stdout.write(f'Creating {battles_total} battle records...')
-        all_tanks = list(Tank.objects.all())
+        all_tanks = list(Tank.objects.select_related('level'))
         battles_created = 0
+        rewards = {}
 
         for i in range(battles_total):
             tank = random.choice(all_tanks)
-            battle_level = random.choice(levels)
+            tank_level = tank.level.level_number
+            # Как в игре: бой доступен на уровнях танка -1, 0, +1
+            battle_level = random.choice(
+                [l for l in levels if abs(l.level_number - tank_level) <= 1]
+            )
             result = random.choice(['victory', 'defeat'])
             reward = battle_level.battle_reward if result == 'victory' else 0
 
-            started_at = fake.date_time_between(start_date='-60d', end_date='now')
-            finished_at = started_at + timedelta(seconds=random.randint(30, 300))
+            started_at = timezone.make_aware(
+                fake.date_time_between(start_date='-60d', end_date='now')
+            )
+            # Длительность боя в игре = уровень танка в секундах
+            finished_at = started_at + timedelta(seconds=tank_level)
 
-            BattleRecord.objects.create(
+            battle = BattleRecord.objects.create(
                 tank=tank,
-                crewman=tank.owner,
+                crewman_id=tank.owner_id,
                 battle_level=battle_level,
                 result=result,
                 reward_earned=reward,
-                started_at=started_at,
                 finished_at=finished_at
             )
+            # started_at — auto_now_add, при создании перезаписывается; задаём через update()
+            BattleRecord.objects.filter(pk=battle.pk).update(started_at=started_at)
+            rewards[tank.owner_id] = rewards.get(tank.owner_id, 0) + reward
             battles_created += 1
             if battles_created % 500 == 0:
                 self.stdout.write(f'  Created {battles_created} battles...')
+
+        # Награды за бои должны попадать в кредиты игроков
+        for crewman_id, total in rewards.items():
+            if total:
+                Crewman.objects.filter(pk=crewman_id).update(credits=F('credits') + total)
 
         self.stdout.write(self.style.SUCCESS(f'✓ Created {battles_created} battle records'))
 

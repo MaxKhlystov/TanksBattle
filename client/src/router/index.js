@@ -13,7 +13,7 @@ import CrewmanView from '@/views/CrewmanView.vue'
 const router = createRouter({
     history: createWebHistory(import.meta.env.BASE_URL),
     routes: [
-        { path: '/', component: GarageView, meta: { requiresAuth: true } },
+        { path: '/', component: GarageView },
         { path: '/tanks', component: TanksView, meta: { requiresAuth: true } },
         { path: '/battles', component: BattlesView, meta: { requiresAuth: true } },
         { path: '/battle-history', component: BattleHistoryView, meta: { requiresAuth: true } },

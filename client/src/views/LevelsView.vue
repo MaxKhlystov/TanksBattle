@@ -33,11 +33,6 @@ async function createLevel() {
         return;
     }
     
-    if (levels.value.some(l => l.level_number === newLevelNumber.value)) {
-        levelError.value = `Уровень ${newLevelNumber.value} уже существует`;
-        return;
-    }
-    
     try {
         const createdLevelNumber = newLevelNumber.value;
         await tanksStore.createLevel({ level_number: createdLevelNumber });
@@ -59,7 +54,7 @@ async function deleteLevel(id) {
     
     const result = await Swal.fire({
         title: 'Удалить уровень?',
-        text: `Это удалит все танки ${level.level_number} уровня и вернёт владельцам полную стоимость (${level.creation_cost} кредитов за танк)!`,
+        text: `Это удалит все танки ${level.level_number} уровня и вернёт владельцам полную стоимость (${level.creation_cost} кредитов за танк). Активные бои на этом уровне будут отменены, а история боёв этого уровня удалена!`,
         icon: 'warning',
         showCancelButton: true,
         confirmButtonColor: '#dc3545',
@@ -73,6 +68,8 @@ async function deleteLevel(id) {
     if (result.isConfirmed) {
         try {
             await tanksStore.deleteLevel(id);
+            await tanksStore.fetchMyTanks();
+            await userStore.checkLogin();
             showSuccess('Уровень удалён', 'Уровень успешно удалён');
         } catch (err) {
             showError('Ошибка', err.response?.data?.error || 'Не удалось удалить уровень');
@@ -108,6 +105,11 @@ const maxLevelNumber = computed(() => {
                         <small class="d-block mt-1">💰 Стоимость создания и награда рассчитываются автоматически</small>
                     </div>
                 </div>
+                <div class="custom-card-body" v-else>
+                    <div class="alert-custom-warning mb-0">
+                        Для создания и удаления уровней требуется двухфакторная аутентификация
+                    </div>
+                </div>
             </div>
 
             <div class="custom-card">
@@ -138,9 +140,6 @@ const maxLevelNumber = computed(() => {
                     </table>
                 </div>
             </div>
-        </div>
-        <div v-else-if="userInfo && userInfo.is_authenticated && userInfo.is_staff && !userInfo.second" class="alert-custom-warning">
-            Для создания уровней рекомендуется двухфакторная аутентификация
         </div>
         <div v-else class="alert-custom-warning">Доступ только для администраторов</div>
     </div>

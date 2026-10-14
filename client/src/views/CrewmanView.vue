@@ -9,6 +9,7 @@ const { userInfo } = storeToRefs(userStore);
 const crewmen = ref([]);
 const loading = ref(false);
 const message = ref('');
+const messageIsError = ref(false);
 
 onBeforeMount(async () => {
     if (userInfo.value.is_staff && userInfo.value.second) {
@@ -23,7 +24,10 @@ async function loadCrewmen() {
         crewmen.value = response.data;
     } catch (error) {
         console.error('Ошибка загрузки пользователей:', error);
+        messageIsError.value = true;
         message.value = 'Ошибка загрузки';
+    } finally {
+        loading.value = false;
     }
 }
 
@@ -33,11 +37,14 @@ async function updateCrewman(crewman) {
             credits: crewman.credits,
             garage_slots: crewman.garage_slots
         });
+        messageIsError.value = false;
         message.value = `Пользователь ${crewman.username} обновлён`;
         setTimeout(() => { message.value = ''; }, 3000);
     } catch (error) {
         console.error('Ошибка обновления:', error);
-        message.value = 'Ошибка при обновлении';
+        const data = error.response?.data;
+        messageIsError.value = true;
+        message.value = data?.error || data?.credits?.[0] || data?.garage_slots?.[0] || 'Ошибка при обновлении';
     }
 }
 </script>
@@ -48,7 +55,7 @@ async function updateCrewman(crewman) {
             <div class="custom-card">
                 <div class="custom-card-header bg-danger">Управление пользователями</div>
                 <div class="custom-card-body">
-                    <div v-if="message" class="alert-custom-success">{{ message }}</div>
+                    <div v-if="message" :class="messageIsError ? 'alert-custom-danger' : 'alert-custom-success'">{{ message }}</div>
                     <div v-if="loading" class="text-center">Загрузка...</div>
                     <table class="custom-table" v-else>
                         <thead>

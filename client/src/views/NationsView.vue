@@ -3,6 +3,7 @@ import { onBeforeMount, ref } from 'vue';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
 import { storeToRefs } from "pinia";
+import { showSuccess, showError } from '@/utils/notifications';
 
 const userStore = useUserStore();
 const tanksStore = useTanksStore();
@@ -14,34 +15,63 @@ const newNation = ref({ name: '', flag: null });
 const editNation = ref(null);
 const showEditModal = ref(false);
 const flagFile = ref(null);
+const flagInput = ref(null);
 const editFlagFile = ref(null);
 
 onBeforeMount(async () => {
     await tanksStore.fetchNations();
 });
 
+function extractError(err, fallback) {
+    const data = err.response?.data;
+    return data?.error || data?.name?.[0] || data?.flag?.[0] || data?.detail || fallback;
+}
+
 async function createNation() {
+    const name = newNation.value.name.trim();
+    if (!name) {
+        showError('Ошибка', 'Введите название нации');
+        return;
+    }
     const formData = new FormData();
-    formData.append('name', newNation.value.name);
+    formData.append('name', name);
     if (flagFile.value) formData.append('flag', flagFile.value);
-    await tanksStore.createNation(formData);
-    newNation.value = { name: '', flag: null };
-    flagFile.value = null;
+    try {
+        await tanksStore.createNation(formData);
+        newNation.value = { name: '', flag: null };
+        flagFile.value = null;
+        if (flagInput.value) flagInput.value.value = '';
+    } catch (err) {
+        showError('Ошибка', extractError(err, 'Не удалось создать нацию'));
+    }
 }
 async function updateNation() {
-    if (editNation.value) {
-        const formData = new FormData();
-        formData.append('name', editNation.value.name);
-        if (editFlagFile.value) formData.append('flag', editFlagFile.value);
+    if (!editNation.value) return;
+    const name = editNation.value.name.trim();
+    if (!name) {
+        showError('Ошибка', 'Введите название нации');
+        return;
+    }
+    const formData = new FormData();
+    formData.append('name', name);
+    if (editFlagFile.value) formData.append('flag', editFlagFile.value);
+    try {
         await tanksStore.updateNation(editNation.value.id, formData);
         showEditModal.value = false;
         editNation.value = null;
         editFlagFile.value = null;
+    } catch (err) {
+        showError('Ошибка', extractError(err, 'Не удалось сохранить нацию'));
     }
 }
 async function deleteNation(id) {
     if (confirm('Удалить нацию?')) {
-        await tanksStore.deleteNation(id);
+        try {
+            await tanksStore.deleteNation(id);
+            showSuccess('Удалено', 'Нация удалена');
+        } catch (err) {
+            showError('Ошибка', extractError(err, 'Не удалось удалить нацию'));
+        }
     }
 }
 function openEditModal(nation) {
@@ -64,11 +94,16 @@ function onEditFlagChange(event) { editFlagFile.value = event.target.files[0]; }
                             <input type="text" class="custom-form-control" v-model="newNation.name" placeholder="Название нации">
                         </div>
                         <div class="col-md-5">
-                            <input type="file" class="custom-form-control" @change="onFlagChange" accept="image/*">
+                            <input type="file" class="custom-form-control" ref="flagInput" @change="onFlagChange" accept="image/*">
                         </div>
                         <div class="col-md-2">
                             <button class="btn-custom-success w-100" @click="createNation">Добавить</button>
                         </div>
+                    </div>
+                </div>
+                <div class="custom-card-body" v-else>
+                    <div class="alert-custom-warning mb-0">
+                        Для добавления, изменения и удаления наций требуется двухфакторная аутентификация
                     </div>
                 </div>
             </div>
@@ -88,9 +123,6 @@ function onEditFlagChange(event) { editFlagFile.value = event.target.files[0]; }
                     </div>
                 </div>
             </div>
-        </div>
-        <div v-else-if="userInfo && userInfo.is_authenticated && userInfo.is_staff && !userInfo.second" class="alert-custom-warning">
-            Для доступа к этой странице требуется двухфакторная аутентификация
         </div>
         <div v-else class="alert-custom-warning">Доступ только для администраторов</div>
     </div>

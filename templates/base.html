@@ -50,20 +50,19 @@
         <h2>Уровни танков</h2>
         <table>
             <thead>
-                <tr><th>ID</th><th>Уровень</th><th>Базовая стоимость</th><th>Стоимость создания</th><th>Стоимость повышения (до след.)</th><th>Награда за бой</th></tr>
+                <tr><th>ID</th><th>Уровень</th><th>Стоимость создания</th><th>Стоимость повышения (до след.)</th><th>Награда за бой</th></tr>
             </thead>
             <tbody>
                 {% for level in levels %}
                 <tr>
                     <td>{{ level.id }}</td>
                     <td>{{ level.level_number }}</td>
-                    <td>{{ level.base_cost }}</td>
                     <td>{{ level.creation_cost }}</td>
                     <td>{{ level.upgrade_to_next_cost|default:"-" }}</td>
                     <td>{{ level.battle_reward }}</td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="6">Нет уровней</td></tr>
+                <tr><td colspan="5">Нет уровней</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -81,7 +80,7 @@
                     <td>{{ crewman.user.username }}</td>
                     <td>{{ crewman.credits }}</td>
                     <td>{{ crewman.garage_slots }}</td>
-                    <td>{{ crewman.available_garage_slots }}</td>
+                    <td>{{ crewman.free_slots }}</td>
                     <td>{{ crewman.created_at|date:"Y-m-d H:i" }}</td>
                 </tr>
                 {% empty %}

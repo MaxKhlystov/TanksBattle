@@ -20,6 +20,7 @@ const isProcessing = ref(false);
 
 const activeBattles = ref({});      
 const pendingResults = ref({});     
+const claiming = ref({});
 
 const showResultModalFlag = ref(false);
 const currentBattleResult = ref(null);
@@ -42,8 +43,7 @@ async function restoreBattlesState() {
             const battle = getBattleByTank(tank.id);
             if (!battle) continue;
 
-            const tankLevel = tanksStore.getLevelInfo(tank.level);
-            const duration = tankLevel?.level_number || 5;
+            const duration = tank.level_number;
             const startedAt = new Date(battle.started_at);
             const now = new Date();
             const elapsed = (now - startedAt) / 1000;
@@ -107,13 +107,12 @@ async function startBattle() {
     const tankId = selectedTankId.value;
     const battleLevelId = selectedBattleLevelId.value;
     const tank = myTanks.value.find(t => t.id === tankId);
-    const tankLevel = tanksStore.getLevelInfo(tank.level);
-    const duration = tankLevel?.level_number || 5;
     
     isProcessing.value = true;
     
     try {
         const result = await tanksStore.startBattle(tankId, battleLevelId);
+        const duration = result.battleDuration || tank?.level_number;
         
         let remaining = duration;
         const timerId = setInterval(() => {
@@ -152,16 +151,19 @@ async function startBattle() {
 
 async function claimReward(tankId) {
     const pending = pendingResults.value[tankId];
-    if (!pending) return;
+    if (!pending || claiming.value[tankId]) return;
+    claiming.value[tankId] = true;
     
     try {
         const result = await tanksStore.claimBattle(pending.battleId);
         showResultModal(result);
         delete pendingResults.value[tankId];
-        await tanksStore.fetchMyTanks();
-        await tanksStore.fetchBattles();
     } catch (error) {
         showError('Ошибка', error.response?.data?.error || 'Не удалось получить результат боя');
+        await tanksStore.fetchMyTanks();
+        await tanksStore.fetchBattles();
+    } finally {
+        delete claiming.value[tankId];
     }
 }
 
@@ -329,7 +331,7 @@ onBeforeMount(async () => {
                                         </span>
                                     </div>
                                     <div v-else-if="pendingResults[tank.id]" class="d-flex gap-2 align-items-center">
-                                        <button class="btn-custom-success btn-sm" @click="claimReward(tank.id)">
+                                        <button class="btn-custom-success btn-sm" :disabled="claiming[tank.id]" @click="claimReward(tank.id)">
                                             Забрать
                                         </button>
                                     </div>

@@ -1,7 +1,6 @@
 <script setup>
-import { onBeforeMount, onMounted, ref, watch, inject, onUnmounted } from 'vue';
+import { onBeforeMount, onMounted, ref, computed, watch, inject, onUnmounted } from 'vue';
 import axios from 'axios';
-import Cookies from 'js-cookie';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
 import { storeToRefs } from "pinia";
@@ -13,8 +12,8 @@ const openImageViewer = inject('openImageViewer');
 const selectedUserData = ref(null);
 
 const { userInfo } = storeToRefs(userStore);
-const { myTanks, levels, nations, allCrewmen, battles } = storeToRefs(tanksStore);
-const { fetchAllCrewmen, fetchMyTanks, fetchLevels, fetchNations, upgradeTank, sellTank, fetchBattles } = tanksStore;
+const { myTanks, levels, nations, allCrewmen } = storeToRefs(tanksStore);
+const { fetchAllCrewmen, fetchMyTanks, fetchLevels, fetchNations, upgradeTank, sellTank, uploadTankPhoto, deleteTankPhoto } = tanksStore;
 
 const selectedTank = ref(null);
 const showUpgradeModal = ref(false);
@@ -26,39 +25,53 @@ const editPictureFile = ref(null);
 const editPicturePreview = ref(null);
 const loading = ref(false);
 
+// Количество танков в ангаре без учёта фильтров
+const garageCount = ref(0);
+
+// Галерея
+const showGalleryModal = ref(false);
+const galleryTankId = ref(null);
+const currentGalleryTank = computed(
+    () => myTanks.value?.find(t => t.id === galleryTankId.value) || null
+);
+
 const filters = ref({ nation: null, level: null, is_in_battle: null });
 const selectedUserId = ref(null);
 
 const battleTimers = ref({});
 let timerInterval = null;
 
-async function updateBattleTimers() {
+// Один запрос за активными боями + по одному /remaining-time/ на бой.
+// Дальше обратный отсчёт идёт локально, без запросов к серверу.
+async function syncBattleTimers() {
     const tanksInBattle = myTanks.value?.filter(t => t.is_in_battle) || [];
-    if (tanksInBattle.length === 0) return;
-    
-    await fetchBattles();
-    const activeBattles = battles.value.filter(b => b.result === 'pending');
-    
+    if (tanksInBattle.length === 0) {
+        battleTimers.value = {};
+        return;
+    }
+
+    const { data } = await axios.get('/api/battles/', { params: { result: 'pending' } });
+    const next = {};
     for (const tank of tanksInBattle) {
-        const activeBattle = activeBattles.find(b => b.tank === tank.id);
+        const activeBattle = data.find(b => b.tank === tank.id);
         if (activeBattle) {
             const timeData = await tanksStore.getBattleRemainingTime(activeBattle.id);
-            battleTimers.value[tank.id] = {
+            next[tank.id] = {
                 remaining: timeData.remaining,
                 total: timeData.total_duration,
                 battleId: activeBattle.id
             };
-        } else if (tank.is_in_battle) {
-            await tanksStore.fetchBattles()
         }
     }
+    battleTimers.value = next;
 }
 
 function startTimerUpdates() {
     if (timerInterval) clearInterval(timerInterval);
     timerInterval = setInterval(() => {
-        if (myTanks.value?.some(t => t.is_in_battle)) {
-            updateBattleTimers();
+        for (const id in battleTimers.value) {
+            const timer = battleTimers.value[id];
+            if (timer.remaining > 0) timer.remaining -= 1;
         }
     }, 1000);
 }
@@ -91,30 +104,44 @@ async function loadTanks() {
         await tanksStore.fetchMyTanks();
         selectedUserData.value = null;
     }
+    garageCount.value = myTanks.value?.length || 0;
+}
+
+function hasActiveFilters() {
+    return !!(filters.value.nation || filters.value.level || filters.value.is_in_battle !== null);
 }
 
 async function applyFilters() {
+    if (!hasActiveFilters()) {
+        await loadTanks();
+        return;
+    }
+
     let url = '/api/tanks/';
     const params = new URLSearchParams();
     if (filters.value.nation) params.append('nation__name', filters.value.nation);
     if (filters.value.level) params.append('level__level_number', filters.value.level);
     if (filters.value.is_in_battle !== null) params.append('is_in_battle', filters.value.is_in_battle);
-    if (selectedUserId.value && userInfo.value.is_staff && userInfo.value.second) {
-        params.append('owner__id', selectedUserId.value);
-    }
-    
-    if (params.toString()) {
-        const response = await axios.get(url + '?' + params.toString());
-        myTanks.value = response.data;
-    } else {
-        await loadTanks();
+
+    const ownerId = (selectedUserId.value && userInfo.value.is_staff && userInfo.value.second)
+        ? selectedUserId.value
+        : userInfo.value.crewman_id;
+    if (ownerId) params.append('owner__id', ownerId);
+
+    const response = await axios.get(url + '?' + params.toString());
+    myTanks.value = response.data;
+}
+
+async function reloadTanks() {
+    await loadTanks();
+    if (hasActiveFilters()) {
+        await applyFilters();
     }
 }
 
 watch(filters, () => applyFilters(), { deep: true });
-watch(selectedUserId, async (newVal, oldVal) => {
-    await loadTanks();
-    await applyFilters();
+watch(selectedUserId, async () => {
+    await reloadTanks();
 });
 
 async function loadAllData() {
@@ -128,11 +155,10 @@ async function loadAllData() {
         if (!nations.value || nations.value.length === 0) {
             await fetchNations();
         }
-        await fetchBattles();
         if (userInfo.value.is_staff && userInfo.value.second && (!allCrewmen.value || allCrewmen.value.length === 0)) {
             await fetchAllCrewmen();
         }
-        await updateBattleTimers();
+        await syncBattleTimers();
         startTimerUpdates();
     } catch (error) {
         console.error('Ошибка загрузки данных:', error);
@@ -145,12 +171,6 @@ onBeforeMount(() => {
     const savedUserId = sessionStorage.getItem('selectedUserId');
     if (savedUserId) {
         selectedUserId.value = parseInt(savedUserId);
-    }
-    
-    axios.defaults.withCredentials = true;
-    const csrfToken = Cookies.get("csrftoken");
-    if (csrfToken) {
-        axios.defaults.headers.common['X-CSRFToken'] = csrfToken;
     }
 });
 
@@ -192,7 +212,7 @@ async function confirmUpgrade() {
     showUpgradeModal.value = false;
     const tank = selectedTank.value;
     selectedTank.value = null;
-    
+
     try {
         await upgradeTank(tank.id);
         await loadAllData();
@@ -214,7 +234,7 @@ async function confirmSell() {
     showSellModal.value = false;
     const tank = selectedTank.value;
     selectedTank.value = null;
-    
+
     try {
         await sellTank(tank.id);
         await loadAllData();
@@ -226,8 +246,12 @@ async function confirmSell() {
 }
 
 async function expandGarage() {
-    await userStore.expandGarage();
-    await loadAllData();
+    try {
+        await userStore.expandGarage();
+        await loadAllData();
+    } catch (error) {
+        showError('Ошибка', error.response?.data?.error || 'Не удалось расширить ангар');
+    }
 }
 
 function openEditModal(tank) {
@@ -253,15 +277,19 @@ async function saveEdit() {
     const formData = new FormData();
     formData.append('name', editForm.value.name);
     formData.append('nation', editForm.value.nation);
-    formData.append('level', editingTank.value.level);
     if (editPictureFile.value) {
         formData.append('picture', editPictureFile.value);
     }
-    await axios.put(`/api/tanks/${editingTank.value.id}/`, formData);
-    showEditModal.value = false;
-    editingTank.value = null;
-    await loadAllData();
-    showSuccess('Сохранено!', 'Танк обновлён');
+    try {
+        await axios.put(`/api/tanks/${editingTank.value.id}/`, formData);
+        showEditModal.value = false;
+        editingTank.value = null;
+        await loadAllData();
+        showSuccess('Сохранено!', 'Танк обновлён');
+    } catch (error) {
+        const data = error.response?.data;
+        showError('Ошибка', data?.error || data?.detail || 'Не удалось сохранить танк');
+    }
 }
 
 async function refreshCrewmenList() {
@@ -270,6 +298,40 @@ async function refreshCrewmenList() {
     }
 }
 
+// --- Логика Галереи ---
+
+function openGallery(tank) {
+    galleryTankId.value = tank.id;
+    showGalleryModal.value = true;
+}
+
+async function handleGalleryUpload(event) {
+    const input = event.target;
+    const file = input.files[0];
+    if (file && currentGalleryTank.value) {
+        try {
+            await uploadTankPhoto(currentGalleryTank.value.id, file);
+            await reloadTanks();
+            showSuccess('Успех', 'Фото добавлено в альбом');
+        } catch (error) {
+            showError('Ошибка', 'Не удалось загрузить фото');
+        } finally {
+            input.value = '';
+        }
+    }
+}
+
+async function handleDeletePhoto(photoId) {
+    if (confirm('Удалить это фото?')) {
+        try {
+            await deleteTankPhoto(photoId);
+            await reloadTanks();
+            showSuccess('Удалено', 'Фотография удалена');
+        } catch (error) {
+            showError('Ошибка', 'Не удалось удалить фото');
+        }
+    }
+}
 </script>
 
 <template>
@@ -325,9 +387,8 @@ async function refreshCrewmenList() {
                         <div class="custom-card bg-success text-white">
                             <div class="custom-card-body">
                                 <h5>Ангар</h5>
-                                <h2>{{ myTanks?.length || 0 }} / {{ selectedUserId && selectedUserData ? selectedUserData.garage_slots : (userInfo.garage_slots || 3) }}</h2>
-                                <!-- Кнопка расширения ангара только для своего аккаунта -->
-                                <button v-if="!selectedUserId && (myTanks?.length || 0) >= (userInfo.garage_slots || 3)" 
+                                <h2>{{ garageCount }} / {{ selectedUserId && selectedUserData ? selectedUserData.garage_slots : (userInfo.garage_slots || 3) }}</h2>
+                                <button v-if="!selectedUserId && garageCount >= (userInfo.garage_slots || 3)" 
                                         class="btn-custom-warning btn-sm mt-2" @click="expandGarage">
                                     + Место (500💰)
                                 </button>
@@ -354,6 +415,7 @@ async function refreshCrewmenList() {
                                 <h5>{{ tank.name }}</h5>
                                 <span class="badge" style="background:#dc3545; padding:4px 8px; border-radius:20px;">Lv.{{ getLevelNumber(tank.level) }}</span>
                             </div>
+                            
                             <p><strong>Нация: </strong> 
                                 <img v-if="tanksStore.getNationInfo(tank.nation)?.flag" 
                                      :src="tanksStore.getNationInfo(tank.nation).flag" 
@@ -369,6 +431,7 @@ async function refreshCrewmenList() {
                                     Готов
                                 </span>
                             </p>
+                            
                             <div class="d-flex gap-2 mt-3" v-if="!tank.is_in_battle">
                                 <button v-if="getUpgradeCost(tank)" 
                                         class="btn-action btn-upgrade" 
@@ -380,6 +443,12 @@ async function refreshCrewmenList() {
                                 <button class="btn-action btn-edit" 
                                         @click="openEditModal(tank)"
                                         title="Редактировать">✏️</button>
+                                <button class="btn-action" 
+                                        style="background-color: #17a2b8; color: white;" 
+                                        @click="openGallery(tank)" 
+                                        title="Альбом">
+                                    📷 {{ tank.photos?.length || 0 }}
+                                </button>
                             </div>
                             <div v-else class="alert-custom-warning text-center mt-2">
                                 ⚔️ {{ battleTimers[tank.id]?.remaining > 0 ? formatBattleTime(battleTimers[tank.id].remaining) : 'В бою' }}
@@ -387,6 +456,7 @@ async function refreshCrewmenList() {
                         </div>
                     </div>
                 </div>
+                
                 <div v-else class="alert-custom-info text-center">
                     <p>У вас пока нет танков</p>
                     <router-link to="/tanks" class="btn-custom-danger">Создать танк</router-link>
@@ -398,6 +468,7 @@ async function refreshCrewmenList() {
         </div>
     </div>
 
+    <!-- Модалка Улучшения -->
     <div v-if="showUpgradeModal" class="modal-overlay">
         <div class="modal-dialog-custom">
             <div class="custom-modal-content">
@@ -417,6 +488,7 @@ async function refreshCrewmenList() {
         </div>
     </div>
 
+    <!-- Модалка Продажи -->
     <div v-if="showSellModal" class="modal-overlay">
         <div class="modal-dialog-custom">
             <div class="custom-modal-content">
@@ -436,6 +508,7 @@ async function refreshCrewmenList() {
         </div>
     </div>
 
+    <!-- Модалка Редактирования -->
     <div v-if="showEditModal" class="modal-overlay">
         <div class="modal-dialog-custom">
             <div class="custom-modal-content">
@@ -463,6 +536,41 @@ async function refreshCrewmenList() {
                 <div class="custom-modal-footer">
                     <button class="btn-custom-secondary" @click="showEditModal = false">Отмена</button>
                     <button class="btn-custom-primary" @click="saveEdit">Сохранить</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модалка Галереи (Альбома) -->
+    <div v-if="showGalleryModal && currentGalleryTank" class="modal-overlay">
+        <div class="modal-dialog-custom" style="max-width: 800px;">
+            <div class="custom-modal-content">
+                <div class="custom-modal-header">
+                    <h5>Альбом: {{ currentGalleryTank.name }}</h5>
+                    <button class="close-btn" @click="showGalleryModal = false">&times;</button>
+                </div>
+                <div class="custom-modal-body">
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <label>Добавить фото:</label>
+                            <input type="file" class="custom-form-control" @change="handleGalleryUpload" accept="image/*">
+                        </div>
+                    </div>
+                    <div class="row" v-if="currentGalleryTank.photos && currentGalleryTank.photos.length > 0">
+                        <div class="col-md-4 mb-3" v-for="photo in currentGalleryTank.photos" :key="photo.id">
+                            <div class="position-relative">
+                                <img :src="photo.image" 
+                                     class="img-fluid rounded" 
+                                     @click="openImageViewer(photo.image)" 
+                                     style="cursor: pointer; height: 150px; object-fit: cover; width: 100%;">
+                                <button class="btn btn-danger btn-sm position-absolute top-0 end-0 m-1" 
+                                        @click="handleDeletePhoto(photo.id)">🗑️</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-else class="text-center text-white">
+                        В альбоме пока нет фотографий
+                    </div>
                 </div>
             </div>
         </div>

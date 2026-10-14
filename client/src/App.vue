@@ -1,6 +1,5 @@
 <script setup>
 import axios from 'axios';
-import Cookies from 'js-cookie';
 import { onBeforeMount, ref, provide } from 'vue';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
@@ -42,9 +41,15 @@ provide('openImageViewer', (url) => {
 async function getTotpKey() {
     try {
         let r = await axios.get('/api/user/get-totp/');
-        totpUrl.value = r.data.url;
-        const QRCode = (await import('qrcode')).default;
-        qrcodeUrl.value = await QRCode.toDataURL(totpUrl.value);
+        if (r.data.url) {
+            totpUrl.value = r.data.url;
+            const QRCode = (await import('qrcode')).default;
+            qrcodeUrl.value = await QRCode.toDataURL(totpUrl.value);
+        } else {
+            // 2FA уже привязана: секрет повторно не выдаётся, нужен только код
+            totpUrl.value = '';
+            qrcodeUrl.value = '';
+        }
         show2FAModal.value = true;
     } catch (error) {
         console.error(error);
@@ -57,11 +62,11 @@ async function verify2FA() {
         await axios.post('/api/user/second-login/', { key: twoFACode.value });
         await userStore.checkLogin();
         twoFACode.value = '';
+        show2FAModal.value = false;
         showSuccess('2FA активирована', 'Двухфакторная аутентификация успешно включена');
     } catch (error) {
         showError('Ошибка', 'Неверный код');
     }
-    show2FAModal.value = false;
 }
 
 async function handleLogin() {
@@ -79,11 +84,6 @@ async function handleLogin() {
             await tanksStore.fetchBattles();
             if (userInfo.value.is_staff && userInfo.value.second) {
                 await tanksStore.fetchAllCrewmen();
-            }
-
-            const csrfToken = Cookies.get("csrftoken");
-            if (csrfToken) {
-                axios.defaults.headers.common['X-CSRFToken'] = csrfToken;
             }
         }
     } catch (error) {
@@ -129,17 +129,6 @@ async function handleLogout() {
 }
 
 onBeforeMount(async () => {
-    axios.defaults.withCredentials = true;
-    
-    try {
-        await axios.get('/api/nations/');
-    } catch (e) {}
-    
-    const csrfToken = Cookies.get("csrftoken");
-    if (csrfToken) {
-        axios.defaults.headers.common['X-CSRFToken'] = csrfToken;
-    }
-    
     userStore.checkLogin();
     tanksStore.fetchNations();
     tanksStore.fetchLevels();
@@ -286,7 +275,7 @@ onBeforeMount(async () => {
                     <button class="close-btn" @click="show2FAModal = false">&times;</button>
                 </div>
                 <div class="custom-modal-body">
-                    <p>Отсканируйте QR-код в приложении (Google Authenticator, Яндекс Ключ и т.д.)</p>
+                    <p v-if="qrcodeUrl">Отсканируйте QR-код в приложении (Google Authenticator, Яндекс Ключ и т.д.)</p>
                     <img v-if="qrcodeUrl" :src="qrcodeUrl" style="max-width: 100%; margin-bottom: 15px;">
                     <div class="form-group">
                         <label>Введите 6-значный код из приложения</label>
@@ -295,7 +284,7 @@ onBeforeMount(async () => {
                 </div>
                 <div class="custom-modal-footer">
                     <button class="btn-custom-secondary" @click="show2FAModal = false">Отмена</button>
-                    <button class="btn-custom-warning" @click="verify2FA", "show2FAModal = false>Активировать</button>
+                    <button class="btn-custom-warning" @click="verify2FA">Активировать</button>
                 </div>
             </div>
         </div>

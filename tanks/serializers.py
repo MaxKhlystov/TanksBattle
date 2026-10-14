@@ -1,5 +1,13 @@
+# tanks/serializers.py
+
 from rest_framework import serializers
-from .models import Nation, Level, Crewman, Tank, BattleRecord
+from .models import Nation, Level, Crewman, Tank, BattleRecord, TankPhoto
+
+class TankPhotoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TankPhoto
+        fields = ['id', 'image', 'uploaded_at']
+        read_only_fields = ['tank', 'uploaded_at']
 
 class NationSerializer(serializers.ModelSerializer):
     class Meta:
@@ -33,13 +41,16 @@ class TankSerializer(serializers.ModelSerializer):
     upgrade_cost = serializers.IntegerField(read_only=True)
     sell_price = serializers.IntegerField(read_only=True)
     dpm = serializers.IntegerField(read_only=True)
+    
+    # ИСПРАВЛЕНИЕ ЗДЕСЬ: убрали source='photos'
+    photos = TankPhotoSerializer(many=True, read_only=True)
 
     class Meta:
         model = Tank
         fields = ['id', 'name', 'owner', 'owner_name', 'nation', 'nation_name',
                   'level', 'level_number', 'is_in_battle', 'dpm', 'upgrade_cost',
-                  'sell_price', 'created_at', 'picture']
-        read_only_fields = ['owner', 'is_in_battle', 'created_at', 'dpm', 'upgrade_cost', 'sell_price']
+                  'sell_price', 'created_at', 'picture', 'photos']
+        read_only_fields = ['owner', 'level', 'is_in_battle', 'created_at', 'dpm', 'upgrade_cost', 'sell_price']
 
     def create(self, validated_data):
         if 'request' in self.context:

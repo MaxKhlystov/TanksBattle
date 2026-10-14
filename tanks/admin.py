@@ -71,8 +71,7 @@ class BattleRecordAdmin(admin.ModelAdmin):
     list_display_links = ['tank']
     list_filter = ['result', 'battle_level', 'started_at']
     search_fields = ['tank__name', 'crewman__user__username']
-    readonly_fields = ['started_at', 'finished_at', 'reward_earned']
-    list_editable = ['result']
+    readonly_fields = ['result', 'started_at', 'finished_at', 'reward_earned']
     actions = ['process_victory', 'process_defeat']
     
     def process_victory(self, request, queryset):

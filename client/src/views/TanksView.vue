@@ -17,8 +17,10 @@ const picturePreview = ref(null);
 const errorMessage = ref('');
 const showErrorModal = ref(false);
 const selectedLevelCost = ref(0);
+const isCreating = ref(false);
 
 onBeforeMount(async () => {
+    await userStore.checkLogin();
     await tanksStore.fetchNations();
     await tanksStore.fetchLevels();
     await tanksStore.fetchMyTanks();
@@ -47,6 +49,7 @@ function onPictureChange(event) {
 }
 
 async function onCreateTank() {
+    if (isCreating.value) return;
     if (!newTank.value.name.trim()) {
         errorMessage.value = 'Введите название танка';
         showErrorModal.value = true;
@@ -81,6 +84,7 @@ async function onCreateTank() {
         formData.append('picture', pictureFile.value);
     }
 
+    isCreating.value = true;
     try {
         await tanksStore.createTank(formData);
         newTank.value = { name: '', nation: null, level: null };
@@ -90,6 +94,8 @@ async function onCreateTank() {
         showSuccess('Успех!', 'Танк успешно создан');
     } catch (error) {
         showError('Ошибка', error.response?.data?.error || 'Ошибка при создании танка');
+    } finally {
+        isCreating.value = false;
     }
 }
 </script>
@@ -132,7 +138,9 @@ async function onCreateTank() {
                             <strong>Стоимость создания:</strong> {{ selectedLevelCost }} кредитов<br>
                             <strong>Доступно кредитов:</strong> {{ userInfo.credits }}
                         </div>
-                        <button type="submit" class="btn-custom-danger w-100">Создать танк</button>
+                        <button type="submit" class="btn-custom-danger w-100" :disabled="isCreating">
+                            {{ isCreating ? 'Создание...' : 'Создать танк' }}
+                        </button>
                     </form>
                 </div>
             </div>

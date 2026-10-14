@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand
 from django.contrib.auth.models import User
 from django.db import connection
 
-from tanks.models import Nation, Level, Crewman, Tank, BattleRecord
+from tanks.models import Nation, Level, Crewman, Tank, TankPhoto, BattleRecord
 
 
 class Command(BaseCommand):
@@ -22,15 +22,31 @@ class Command(BaseCommand):
         parser.add_argument(
             '--keep-superuser',
             action='store_true',
-            help='Keep superuser account (default: True)',
+            help='Deprecated: staff and superuser accounts are kept by default',
+        )
+        parser.add_argument(
+            '--delete-superusers',
+            action='store_true',
+            help='Also delete staff and superuser accounts (default: keep them)',
         )
         parser.add_argument(
             '--full',
             action='store_true',
             help='Full clean - delete ALL data including levels and nations',
         )
+        parser.add_argument(
+            '--noinput',
+            action='store_true',
+            help='Do not ask for confirmation',
+        )
 
     def handle(self, *args, **options):
+        if not options['noinput']:
+            answer = input('Это удалит данные из базы. Продолжить? [y/N] ')
+            if answer.strip().lower() != 'y':
+                self.stdout.write('Отменено')
+                return
+
         self.stdout.write(self.style.WARNING('='*50))
         self.stdout.write(self.style.WARNING('STARTING DATABASE CLEANUP'))
         self.stdout.write(self.style.WARNING('='*50))
@@ -43,7 +59,7 @@ class Command(BaseCommand):
         Tank.objects.all().delete()
         self.stdout.write(self.style.SUCCESS(f'✓ Deleted {tanks_count} tanks'))
         
-        if options.get('keep_superuser', True):
+        if not options['delete_superusers']:
             users_to_delete = User.objects.filter(is_superuser=False, is_staff=False)
             users_count = users_to_delete.count()
             
@@ -88,11 +104,17 @@ class Command(BaseCommand):
     def reset_sequences(self):
         """Сброс автоинкрементов для SQLite"""
         if connection.vendor == 'sqlite':
-            with connection.cursor() as cursor:
-                tables = ['tanks_battle_record', 'tanks_tank', 'tanks_crewman', 'tanks_level', 'tanks_nation']
-                for table in tables:
-                    try:
-                        cursor.execute(f"DELETE FROM sqlite_sequence WHERE name='{table}';")
-                    except:
-                        pass
-            self.stdout.write(self.style.SUCCESS('✓ Reset auto-increment sequences'))
+            tables = [
+                m._meta.db_table
+                for m in (BattleRecord, TankPhoto, Tank, Crewman, Level, Nation)
+            ]
+            placeholders = ', '.join(['%s'] * len(tables))
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})",
+                        tables,
+                    )
+                self.stdout.write(self.style.SUCCESS('✓ Reset auto-increment sequences'))
+            except Exception as e:
+                self.stdout.write(self.style.WARNING(f'Не удалось сбросить автоинкременты: {e}'))

@@ -4,8 +4,7 @@ import axios from "axios";
 import { useUserStore } from '@/stores/user_store';   
 
 export const useTanksStore = defineStore("tanksStore", () => {
-    const userStore = useUserStore();   // добавлено
-
+    const userStore = useUserStore();
     const myTanks = ref([]);
     const levels = ref([]);
     const nations = ref([]);
@@ -33,23 +32,46 @@ export const useTanksStore = defineStore("tanksStore", () => {
         return await fetchTanks({ owner__id: crewmanId });
     }
 
+    async function uploadTankPhoto(tankId, file) {
+        const formData = new FormData();
+        formData.append('tank', tankId);
+        formData.append('image', file);
+        
+        try {
+            const response = await axios.post('/api/tank-photos/', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            // После загрузки обновляем список танков, чтобы подтянуть новое фото в массив photos
+            await fetchMyTanks(); 
+            return response.data;
+        } catch (error) {
+            console.error("Ошибка загрузки фото:", error);
+            throw error;
+        }
+    }
+
+    async function deleteTankPhoto(photoId) {
+        try {
+            await axios.delete(`/api/tank-photos/${photoId}/`);
+            await fetchMyTanks();
+        } catch (error) {
+            console.error("Ошибка удаления фото:", error);
+            throw error;
+        }
+    }
+
     async function fetchTanksByUser(userId) {
         return await fetchTanks({ owner__id: userId });
     }
 
     async function createTank(data) {
         try {
-            console.log("Sending create tank request...");
-            console.log("CSRF header:", axios.defaults.headers.common['X-CSRFToken']);
-            
             const response = await axios.post("/api/tanks/create/", data);
             await fetchMyTanks();
             await userStore.checkLogin();
             return response.data;
         } catch (error) {
             console.error("Ошибка создания танка:", error);
-            console.error("Response headers:", error.response?.headers);
-            console.error("Request headers:", error.config?.headers);
             throw error;
         }
     }
@@ -90,15 +112,11 @@ export const useTanksStore = defineStore("tanksStore", () => {
 
     async function createLevel(data) {
         try {
-            console.log("Sending level data:", data);
             const response = await axios.post("/api/levels/", data);
-            console.log("Response:", response.data);
             await fetchLevels();
             return response.data;
         } catch (error) {
             console.error("Ошибка создания уровня:", error);
-            console.error("Response data:", error.response?.data);
-            console.error("Status:", error.response?.status);
             throw error;
         }
     }
@@ -194,6 +212,7 @@ export const useTanksStore = defineStore("tanksStore", () => {
         const response = await axios.post(`/api/battles/${battleId}/claim/`);
         await fetchMyTanks();
         await fetchBattles();
+        await userStore.checkLogin();
         return response.data;
     }
 
@@ -203,7 +222,7 @@ export const useTanksStore = defineStore("tanksStore", () => {
             return response.data;
         } catch (error) {
             console.error('Ошибка получения времени боя:', error);
-            return { remaining: 0, finished: true };
+            return { remaining: 0, finished: false, error: true };
         }
     }
 
@@ -261,5 +280,7 @@ export const useTanksStore = defineStore("tanksStore", () => {
         fetchBattlesByUser,
         claimBattle,
         resetStore,
+        uploadTankPhoto, 
+        deleteTankPhoto,
     };
 });

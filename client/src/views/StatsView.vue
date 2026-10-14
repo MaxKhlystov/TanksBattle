@@ -35,6 +35,11 @@ async function loadAllStats() {
     }
 }
 
+function distPercent(count) {
+    const total = tankStats.value?.total_tanks || 0;
+    return total ? Math.round((count || 0) / total * 100) : 0;
+}
+
 async function exportAllToExcel() {
     try {
         const response = await axios.get('/api/user/export-all-stats/', { responseType: 'blob' });
@@ -47,10 +52,14 @@ async function exportAllToExcel() {
         link.click();
         link.remove();
         URL.revokeObjectURL(objectUrl);
-        showSuccess('Экспорт завершён', 'Файл statistics.xlsx скачан');
+        showSuccess('Экспорт завершён', 'Файл full_statistics.xlsx скачан');
     } catch (error) {
         console.error('Ошибка экспорта:', error);
-        showError('Ошибка', 'Не удалось скачать файл');
+        if (error.response?.status === 403) {
+            showError('Нужна 2FA', 'Для экспорта подтвердите двухфакторную аутентификацию');
+        } else {
+            showError('Ошибка', 'Не удалось скачать файл');
+        }
     }
 }
 
@@ -64,9 +73,14 @@ onBeforeMount(() => {
         <div v-if="userInfo && userInfo.is_authenticated && userInfo.is_staff">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2 class="stats-title">Статистика</h2>
-                <button class="btn-custom-success" @click="exportAllToExcel">
+                <button class="btn-custom-success" :disabled="!userInfo.second"
+                        :title="!userInfo.second ? 'Нужна двухфакторная аутентификация' : ''"
+                        @click="exportAllToExcel">
                     📊 Экспорт всей статистики в Excel
                 </button>
+            </div>
+            <div v-if="!userInfo.second" class="alert-custom-warning">
+                Для экспорта в Excel требуется двухфакторная аутентификация
             </div>
 
             <div v-if="loading" class="text-center p-5">
@@ -182,7 +196,7 @@ onBeforeMount(() => {
                                 </div>
                                 <div class="progress mb-2">
                                     <div class="progress-bar bg-danger" 
-                                         :style="{ width: (dist.tanks_count / tankStats.total_tanks * 100) + '%' }">
+                                         :style="{ width: distPercent(dist.tanks_count) + '%' }">
                                     </div>
                                 </div>
                             </div>
@@ -190,9 +204,6 @@ onBeforeMount(() => {
                     </div>
                 </div>
             </div>
-        </div>
-        <div v-else-if="userInfo && userInfo.is_authenticated && userInfo.is_staff && !userInfo.second" class="alert-custom-warning">
-            Статистика доступна администраторам
         </div>
         <div v-else class="alert-custom-warning">Доступ только для администраторов</div>
     </div>

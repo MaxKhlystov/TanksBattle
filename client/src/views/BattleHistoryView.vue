@@ -8,7 +8,7 @@ const userStore = useUserStore();
 const tanksStore = useTanksStore();
 
 const { userInfo } = storeToRefs(userStore);
-const { battles, myTanks, levels } = storeToRefs(tanksStore);
+const { battles } = storeToRefs(tanksStore);
 
 const filterResult = ref('all');
 const filteredBattles = ref([]);
@@ -26,25 +26,19 @@ const totalEarned = computed(() => {
 });
 
 const winRate = computed(() => {
-    if (battles.value.length === 0) return 0;
-    return Math.round((totalWins.value / battles.value.length) * 100);
+    const finished = totalWins.value + totalDefeats.value;
+    if (finished === 0) return 0;
+    return Math.round((totalWins.value / finished) * 100);
 });
 
 onBeforeMount(async () => {
-    await tanksStore.fetchBattles();
-    await tanksStore.fetchMyTanks();
-    await tanksStore.fetchLevels();
+    const crewmanId = userInfo.value.crewman_id;
+    if (crewmanId) {
+        await tanksStore.fetchBattlesByUser(crewmanId);
+    } else {
+        await tanksStore.fetchBattles();
+    }
 });
-
-function getTankName(tankId) {
-    const tank = myTanks.value.find(t => t.id === tankId);
-    return tank ? tank.name : 'Неизвестный танк';
-}
-
-function getLevelNumber(levelId) {
-    const level = tanksStore.getLevelInfo(levelId);
-    return level ? level.level_number : '?';
-}
 
 function getResultText(result) {
     switch(result) {
@@ -139,7 +133,7 @@ watch([battles, filterResult], () => applyFilters(), { deep: true, immediate: tr
                     </div>
                     <div v-for="battle in filteredBattles" :key="battle.id" class="border-bottom pb-3 mb-3">
                         <div class="d-flex justify-content-between">
-                            <div><strong>{{ getTankName(battle.tank) }}</strong> vs Уровень {{ getLevelNumber(battle.battle_level) }}</div>
+                            <div><strong>{{ battle.tank_name }}</strong> vs Уровень {{ battle.battle_level_number }}</div>
                             <div :class="getResultClass(battle.result)"><strong>{{ getResultText(battle.result) }}</strong></div>
                         </div>
                         <div class="d-flex justify-content-between mt-1">
