@@ -15,7 +15,7 @@ async function onSaveClick(crewman) {
         await tanksStore.updateCrewman(crewman);
         alert('Сохранено');
     } catch (error) {
-        alert(error.response.data.error);
+        alert(error.response.data.error || error.response.data.detail);
     }
 }
 </script>
