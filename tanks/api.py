@@ -214,15 +214,16 @@ class TankViewSet(
         if crewman.tanks.count() >= crewman.garage_slots:
             return Response({"error": "Нет свободных мест в ангаре"}, status=400)
 
-        crewman.credits -= level.creation_cost
-        crewman.save()
-        tank = Tank.objects.create(
-            name=name,
-            owner=crewman,
-            nation=nation,
-            level=level,
-            picture=request.FILES.get("picture"),
-        )
+        with transaction.atomic():
+            crewman.credits -= level.creation_cost
+            crewman.save()
+            tank = Tank.objects.create(
+                name=name,
+                owner=crewman,
+                nation=nation,
+                level=level,
+                picture=request.FILES.get("picture"),
+            )
         return Response(TankSerializer(tank).data, status=201)
 
     @action(detail=True, methods=["POST"], url_path="upgrade")
@@ -240,10 +241,11 @@ class TankViewSet(
         if owner.credits < cost:
             return Response({"error": f"Не хватает кредитов. Нужно {cost}"}, status=400)
 
-        owner.credits -= cost
-        owner.save()
-        tank.level = next_level
-        tank.save()
+        with transaction.atomic():
+            owner.credits -= cost
+            owner.save()
+            tank.level = next_level
+            tank.save()
         return Response({"success": True, "new_level": next_level.level_number})
 
     @action(detail=True, methods=["POST"], url_path="sell")
@@ -254,9 +256,10 @@ class TankViewSet(
 
         price = tank.sell_price
         owner = tank.owner
-        owner.credits += price
-        owner.save()
-        tank.delete()
+        with transaction.atomic():
+            owner.credits += price
+            owner.save()
+            tank.delete()
         return Response({"success": True, "credits_earned": price})
 
     @action(detail=False, methods=["GET"], url_path="stats")
