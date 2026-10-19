@@ -1,29 +1,12 @@
-"""
-Django settings for app project.
-"""
-
-import os
 from pathlib import Path
-
-from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# По умолчанию — режим разработки. В продакшене задайте DJANGO_DEBUG=0.
-DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
+SECRET_KEY = 'django-insecure-tank-battles-course-project'
 
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
-if not SECRET_KEY:
-    if DEBUG:
-        SECRET_KEY = 'dev-only-insecure-key-do-not-use-in-production'
-    else:
-        raise ImproperlyConfigured('Задайте переменную окружения DJANGO_SECRET_KEY')
+DEBUG = True
 
-ALLOWED_HOSTS = [
-    h.strip()
-    for h in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
-    if h.strip()
-]
+ALLOWED_HOSTS = []
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -34,12 +17,10 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'django_filters',
-    'corsheaders',
     'tanks',
 ]
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -54,7 +35,7 @@ ROOT_URLCONF = 'app.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / "templates"],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -88,52 +69,12 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = 'static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-MEDIA_ROOT = BASE_DIR / "media"
-MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL = '/media/'
 
-# Источники для CSRF/CORS задаются один раз: dev-адреса только в режиме DEBUG,
-# для продакшена — через DJANGO_TRUSTED_ORIGINS (список через запятую, со схемой).
-_DEV_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
-_EXTRA_ORIGINS = [
-    o.strip()
-    for o in os.environ.get('DJANGO_TRUSTED_ORIGINS', '').split(',')
-    if o.strip()
-]
-
-CSRF_TRUSTED_ORIGINS = (_DEV_ORIGINS if DEBUG else []) + _EXTRA_ORIGINS
-if DEBUG:
-    CSRF_TRUSTED_ORIGINS += ['http://localhost:8000', 'http://127.0.0.1:8000']
-CORS_ALLOWED_ORIGINS = (_DEV_ORIGINS if DEBUG else []) + _EXTRA_ORIGINS
-CORS_ALLOW_CREDENTIALS = True
-
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'unique-snowflake',
-    }
-}
-
-LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-        },
-    },
-    'root': {
-        'handlers': ['console'],
-        'level': 'ERROR',
-    },
-}
-
-SESSION_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SAMESITE = 'Lax'
-CSRF_COOKIE_HTTPONLY = False
+CSRF_TRUSTED_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -142,12 +83,4 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
-    'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle',
-    ],
-    'DEFAULT_THROTTLE_RATES': {
-        'anon': '60/min',
-        'user': '600/min',
-    },
-}
+}

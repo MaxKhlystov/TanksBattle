@@ -9,12 +9,10 @@ def repair_battle_state(apps, schema_editor):
 
     pending = BattleRecord.objects.filter(result="pending")
 
-    # Танки «в бою» без активной записи боя (остались после каскадного удаления уровня)
     Tank.objects.filter(is_in_battle=True).exclude(
         pk__in=pending.values("tank_id")
     ).update(is_in_battle=False)
 
-    # Активные бои у танков, которых админ уже «освободил»
     pending.filter(tank__is_in_battle=False).update(
         result="defeat", finished_at=timezone.now()
     )
@@ -55,4 +53,4 @@ class Migration(migrations.Migration):
                 to="tanks.level",
             ),
         ),
-    ]
+    ]

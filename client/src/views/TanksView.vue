@@ -1,126 +1,78 @@
 <script setup>
-import { onBeforeMount, ref, computed } from 'vue';
+import { computed, onBeforeMount, ref } from 'vue';
+import { storeToRefs } from 'pinia';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
-import { storeToRefs } from "pinia";
-import { showSuccess, showError, getErrorMessage } from '@/utils/notifications';
 
 const userStore = useUserStore();
 const tanksStore = useTanksStore();
-
 const { userInfo } = storeToRefs(userStore);
-const { nations, levels, myTanks } = storeToRefs(tanksStore);
+const { nations, levels } = storeToRefs(tanksStore);
 
-const newTank = ref({ name: '', nation: null, level: null });
-const pictureFile = ref(null);
-const picturePreview = ref(null);
-const isCreating = ref(false);
+const tankToAdd = ref({ name: '', nation: null, level: null });
+const pictureRef = ref(null);
 
-// Пользователя проверяет router.beforeEach; здесь только данные для формы
-onBeforeMount(async () => {
-    await tanksStore.fetchNations();
-    await tanksStore.fetchLevels();
-    await tanksStore.fetchMyTanks();
-});
-
-const selectedLevelCost = computed(() => {
-    const level = tanksStore.getLevelInfo(newTank.value.level);
+const cost = computed(() => {
+    const level = tanksStore.getLevelInfo(tankToAdd.value.level);
     return level ? level.creation_cost : 0;
 });
 
-function onPictureChange(event) {
-    const file = event.target.files[0];
-    pictureFile.value = file || null;
-    picturePreview.value = file ? URL.createObjectURL(file) : null;
-}
+onBeforeMount(async () => {
+    await tanksStore.fetchNations();
+    await tanksStore.fetchLevels();
+});
 
-function validationError() {
-    if (!newTank.value.name.trim()) return 'Введите название танка';
-    if (!newTank.value.nation) return 'Выберите нацию';
-    if (!newTank.value.level) return 'Выберите уровень';
-    if (userInfo.value.credits < selectedLevelCost.value) {
-        return `Недостаточно кредитов! Нужно: ${selectedLevelCost.value}, у вас: ${userInfo.value.credits}`;
-    }
-    if (myTanks.value.length >= userInfo.value.garage_slots) return 'Нет свободных мест в ангаре!';
-    return null;
-}
-
-async function onCreateTank() {
-    if (isCreating.value) return;
-    const error = validationError();
-    if (error) {
-        showError('Ошибка', error);
-        return;
-    }
-
+async function onTankAdd() {
     const formData = new FormData();
-    formData.append('name', newTank.value.name);
-    formData.append('nation', newTank.value.nation);
-    formData.append('level', newTank.value.level);
-    if (pictureFile.value) {
-        formData.append('picture', pictureFile.value);
+    formData.append('name', tankToAdd.value.name);
+    formData.append('nation', tankToAdd.value.nation);
+    formData.append('level', tankToAdd.value.level);
+    if (pictureRef.value.files[0]) {
+        formData.append('picture', pictureRef.value.files[0]);
     }
-
-    isCreating.value = true;
     try {
         await tanksStore.createTank(formData);
-        newTank.value = { name: '', nation: null, level: null };
-        pictureFile.value = null;
-        picturePreview.value = null;
-        showSuccess('Успех!', 'Танк успешно создан');
     } catch (error) {
-        showError('Ошибка', getErrorMessage(error, 'Ошибка при создании танка'));
-    } finally {
-        isCreating.value = false;
+        alert(error.response.data.error);
+        return;
     }
+    await userStore.checkLogin();
+    tankToAdd.value = { name: '', nation: null, level: null };
+    pictureRef.value.value = '';
+    alert('Танк создан');
 }
 </script>
 
 <template>
-    <div class="custom-container">
-        <div v-if="userInfo.is_authenticated">
-            <div class="custom-card">
-                <div class="custom-card-header">Создать новый танк</div>
-                <div class="custom-card-body">
-                    <form @submit.prevent="onCreateTank">
-                        <div class="form-group">
-                            <label>Название танка</label>
-                            <input type="text" class="custom-form-control" v-model="newTank.name" placeholder="Например: Т-34" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Нация</label>
-                            <select class="custom-form-select" v-model="newTank.nation" required>
-                                <option :value="null" disabled>Выберите нацию</option>
-                                <option :value="nation.id" v-for="nation in nations" :key="nation.id">
-                                    {{ nation.name }}
-                                </option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Уровень</label>
-                            <select class="custom-form-select" v-model="newTank.level" required>
-                                <option :value="null" disabled>Выберите уровень</option>
-                                <option :value="level.id" v-for="level in levels" :key="level.id">
-                                    {{ level.level_number }} уровень ({{ level.creation_cost }} кредитов)
-                                </option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Изображение танка</label>
-                            <input type="file" class="custom-form-control" @change="onPictureChange" accept="image/*">
-                            <img v-if="picturePreview" :src="picturePreview" style="max-width: 200px; margin-top: 10px; border-radius: 10px;">
-                        </div>
-                        <div v-if="selectedLevelCost > 0" class="alert-custom-info">
-                            <strong>Стоимость создания:</strong> {{ selectedLevelCost }} кредитов<br>
-                            <strong>Доступно кредитов:</strong> {{ userInfo.credits }}
-                        </div>
-                        <button type="submit" class="btn-custom-danger w-100" :disabled="isCreating">
-                            {{ isCreating ? 'Создание...' : 'Создать танк' }}
-                        </button>
-                    </form>
+    <div class="card">
+        <div class="card-header">Создать новый танк</div>
+        <div class="card-body">
+            <form @submit.prevent.stop="onTankAdd">
+                <div class="mb-3">
+                    <label class="form-label">Название танка</label>
+                    <input type="text" class="form-control" v-model="tankToAdd.name" required>
                 </div>
-            </div>
+                <div class="mb-3">
+                    <label class="form-label">Нация</label>
+                    <select class="form-select" v-model="tankToAdd.nation" required>
+                        <option v-for="n in nations" :key="n.id" :value="n.id">{{ n.name }}</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Уровень</label>
+                    <select class="form-select" v-model="tankToAdd.level" required>
+                        <option v-for="l in levels" :key="l.id" :value="l.id">
+                            {{ l.level_number }} уровень ({{ l.creation_cost }} кредитов)
+                        </option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Изображение</label>
+                    <input type="file" class="form-control" ref="pictureRef" accept="image/*">
+                </div>
+                <p>Стоимость: {{ cost }} кредитов. У вас: {{ userInfo.credits }} кредитов.</p>
+                <button type="submit" class="btn btn-primary">Создать танк</button>
+            </form>
         </div>
-        <div v-else class="alert-custom-warning">Пожалуйста, авторизуйтесь</div>
     </div>
-</template>
+</template>

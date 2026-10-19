@@ -1,121 +1,63 @@
 import io
-import math
 import random
-import pyotp
+import time
 
+import pyotp
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
-from django.db import IntegrityError, transaction
-from django.db.models import Avg, Count, F, Max, Min, ProtectedError, Q, Sum
+from django.db import transaction
+from django.db.models import Avg, Count, Max, Min, Q, Sum
 from django.http import HttpResponse
 from django.middleware.csrf import get_token
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font
-from rest_framework import mixins, permissions, serializers as drf_serializers, status, viewsets
+from rest_framework import mixins, permissions, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
-from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
 from .models import BattleRecord, Crewman, Level, Nation, Tank
-from .permissions import (
-    IsStaffAnd2FAOrReadOnly,
-    IsStaffAnd2FAVerified,
-    clear_2fa,
-    has_2fa,
-    is_staff_with_2fa,
-    set_2fa,
-)
+from .permissions import IsAdminWith2FA, IsAdminWith2FAOrReadOnly, has_2fa, is_admin
 from .serializers import (
-    MAX_UPLOAD_SIZE,
     BattleRecordSerializer,
     CrewmanSerializer,
-    CrewmanUpdateSerializer,
     LevelSerializer,
     NationSerializer,
     TankSerializer,
 )
 
-GARAGE_SLOT_COST = 500  # цена одного дополнительного места в ангаре
-
-
 def get_crewman(user):
-    """Профиль игрока текущего пользователя (создаётся при первом обращении)."""
     crewman, _ = Crewman.objects.get_or_create(user=user)
     return crewman
-
-
-def put_cell(ws, row, column, value):
-    """Записывает значение в ячейку; строки, начинающиеся с "=", не становятся формулами."""
-    cell = ws.cell(row=row, column=column, value=value)
-    if isinstance(value, str) and value.startswith("="):
-        cell.data_type = "s"
-    return cell
-
-
-def fill_sheet(ws, headers, rows):
-    """Заполняет лист Excel: жирные заголовки, строки данных, ширина колонок по содержимому."""
-    for col, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal="center")
-    for row, values in enumerate(rows, 2):
-        for col, value in enumerate(values, 1):
-            put_cell(ws, row, col, value)
-    for column in ws.columns:
-        width = max(len(str(cell.value)) for cell in column if cell.value is not None)
-        ws.column_dimensions[column[0].column_letter].width = min(width + 2, 50)
-
-
-def format_dt(value):
-    return value.strftime("%Y-%m-%d %H:%M") if value else "-"
-
 
 class NationViewSet(viewsets.ModelViewSet):
     queryset = Nation.objects.all()
     serializer_class = NationSerializer
-    permission_classes = [IsStaffAnd2FAOrReadOnly]
+    permission_classes = [IsAdminWith2FAOrReadOnly]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ["name"]
 
     def destroy(self, request, *args, **kwargs):
         nation = self.get_object()
         if nation.tanks.exists():
-            return Response(
-                {"error": "Нельзя удалить нацию: у неё есть танки"},
-                status=status.HTTP_409_CONFLICT,
-            )
-        try:
-            return super().destroy(request, *args, **kwargs)
-        except ProtectedError:
-            # страховка от гонки: танк мог появиться между проверкой и удалением
-            return Response(
-                {"error": "Нельзя удалить нацию: она используется"},
-                status=status.HTTP_409_CONFLICT,
-            )
+            return Response({"error": "Нельзя удалить нацию: у неё есть танки"}, status=400)
+        nation.delete()
+        return Response(status=204)
 
     @action(detail=False, methods=["GET"], url_path="stats")
     def nation_stats(self, request):
-        stats = Nation.objects.annotate(tanks_count=Count("tanks")).aggregate(
-            total_nations=Count("id"),
-            total_tanks=Sum("tanks_count"),
-            avg_tanks_per_nation=Avg("tanks_count"),
-        )
-        most_popular = (
-            Nation.objects.annotate(tanks_count=Count("tanks"))
-            .order_by("-tanks_count")
-            .first()
-        )
-        stats["most_popular_nation"] = most_popular.name if most_popular else None
-        stats["most_popular_tanks_count"] = (
-            most_popular.tanks_count if most_popular else 0
-        )
-        if stats["avg_tanks_per_nation"] is None:
-            stats["avg_tanks_per_nation"] = 0
-        return Response(stats)
+        total_nations = Nation.objects.count()
+        total_tanks = Tank.objects.count()
+        most_popular = Nation.objects.annotate(tanks_count=Count("tanks")).order_by("-tanks_count").first()
+        return Response({
+            "total_nations": total_nations,
+            "total_tanks": total_tanks,
+            "avg_tanks_per_nation": total_tanks / total_nations if total_nations else 0,
+            "most_popular_nation": most_popular.name if most_popular else None,
+            "most_popular_tanks_count": most_popular.tanks_count if most_popular else 0,
+        })
 
 
 class LevelViewSet(
@@ -127,9 +69,35 @@ class LevelViewSet(
 ):
     queryset = Level.objects.all()
     serializer_class = LevelSerializer
-    permission_classes = [IsStaffAnd2FAOrReadOnly]
+    permission_classes = [IsAdminWith2FAOrReadOnly]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ["level_number"]
+
+    def create(self, request, *args, **kwargs):
+        max_level = Level.objects.aggregate(Max("level_number"))["level_number__max"] or 0
+        if int(request.data.get("level_number", 0)) != max_level + 1:
+            return Response({"error": f"Следующий уровень должен быть {max_level + 1}"}, status=400)
+        return super().create(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        level = self.get_object()
+        max_level = Level.objects.aggregate(Max("level_number"))["level_number__max"]
+        if level.level_number != max_level:
+            return Response({"error": f"Можно удалить только последний уровень ({max_level})"}, status=400)
+
+        for battle in BattleRecord.objects.filter(battle_level=level, result="pending"):
+            battle.tank.is_in_battle = False
+            battle.tank.save()
+
+        for tank in Tank.objects.filter(level=level):
+            owner = Crewman.objects.get(pk=tank.owner_id)
+            owner.credits += level.creation_cost
+            owner.save()
+
+        BattleRecord.objects.filter(battle_level=level).delete()
+        Tank.objects.filter(level=level).delete()
+        level.delete()
+        return Response({"success": True})
 
     @action(detail=False, methods=["GET"], url_path="stats")
     def level_stats(self, request):
@@ -139,73 +107,17 @@ class LevelViewSet(
             max_level=Max("level_number"),
             avg_level=Avg("level_number"),
         )
-        level_distribution = (
-            Level.objects.annotate(tanks_count=Count("tanks"))
-            .values("level_number", "tanks_count")
-            .order_by("level_number")
+        stats["level_distribution"] = list(
+            Level.objects.annotate(tanks_count=Count("tanks")).values("level_number", "tanks_count")
         )
-        stats["level_distribution"] = list(level_distribution)
-        if stats["avg_level"] is None:
-            stats["avg_level"] = 0
         return Response(stats)
-
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        max_level = Level.objects.aggregate(Max("level_number"))["level_number__max"] or 0
-        if serializer.validated_data["level_number"] != max_level + 1:
-            return Response(
-                {"level_number": [f"Следующий уровень должен быть {max_level + 1}"]},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        self.perform_create(serializer)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-    def destroy(self, request, *args, **kwargs):
-        level = self.get_object()
-        max_level = Level.objects.aggregate(Max("level_number"))["level_number__max"]
-        if level.level_number != max_level:
-            return Response(
-                {
-                    "error": f"Нельзя удалить уровень {level.level_number}. "
-                    f"Можно удалить только последний уровень ({max_level})."
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        with transaction.atomic():
-            # Бои на этом уровне: освобождаем танки (в т.ч. с других уровней), бои — поражение
-            BattleRecord.cancel_pending(BattleRecord.objects.filter(battle_level=level))
-
-            # Возврат стоимости владельцам танков этого уровня
-            refund = level.creation_cost
-            owner_ids = list(
-                Tank.objects.filter(level=level).values_list("owner_id", flat=True)
-            )
-            for owner_id in owner_ids:
-                Crewman.objects.filter(pk=owner_id).update(
-                    credits=F("credits") + refund
-                )
-            total_refund = refund * len(owner_ids)
-
-            BattleRecord.objects.filter(battle_level=level).delete()
-            Tank.objects.filter(level=level).delete()
-            level.delete()
-
-        return Response(
-            {
-                "success": True,
-                "message": f"Уровень {level.level_number} удалён. Возвращено кредитов: {total_refund}",
-            }
-        )
-
 
 class CrewmanViewSet(GenericViewSet):
     serializer_class = CrewmanSerializer
 
     def get_permissions(self):
         if self.action in ["update", "list_users"]:
-            return [IsStaffAnd2FAVerified()]
+            return [IsAdminWith2FA()]
         if self.action == "register":
             return [permissions.AllowAny()]
         return super().get_permissions()
@@ -213,16 +125,12 @@ class CrewmanViewSet(GenericViewSet):
     @action(detail=False, methods=["POST"], url_path="expand-garage")
     def expand_garage(self, request):
         crewman = get_crewman(request.user)
-        updated = Crewman.objects.filter(pk=crewman.pk, credits__gte=GARAGE_SLOT_COST).update(
-            credits=F("credits") - GARAGE_SLOT_COST, garage_slots=F("garage_slots") + 1
-        )
-        if updated:
-            crewman.refresh_from_db(fields=["garage_slots"])
-            return Response({"success": True, "garage_slots": crewman.garage_slots})
-        return Response(
-            {"success": False, "error": "Недостаточно кредитов"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        if crewman.credits < 500:
+            return Response({"error": "Недостаточно кредитов"}, status=400)
+        crewman.credits -= 500
+        crewman.garage_slots += 1
+        crewman.save()
+        return Response({"success": True, "garage_slots": crewman.garage_slots})
 
     @action(detail=False, methods=["POST"], url_path="register")
     def register(self, request):
@@ -231,84 +139,43 @@ class CrewmanViewSet(GenericViewSet):
         email = request.data.get("email", "")
 
         if not username or not password:
-            return Response(
-                {"error": "Укажите имя пользователя и пароль"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"error": "Укажите имя пользователя и пароль"}, status=400)
         if User.objects.filter(username=username).exists():
-            return Response(
-                {"error": "Пользователь с таким именем уже существует"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        try:
-            with transaction.atomic():
-                user = User.objects.create_user(
-                    username=username, password=password, email=email
-                )
-                crewman = Crewman.objects.create(user=user)
-        except IntegrityError:
-            # одновременная регистрация с тем же именем
-            return Response(
-                {"error": "Пользователь с таким именем уже существует"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"error": "Пользователь с таким именем уже существует"}, status=400)
+
+        with transaction.atomic():
+            user = User.objects.create_user(username=username, password=password, email=email)
+            crewman = Crewman.objects.create(user=user)
         login(request, user)
-        serializer = self.get_serializer(crewman)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(CrewmanSerializer(crewman).data, status=201)
 
     @action(detail=False, methods=["GET"], url_path="list-users")
     def list_users(self, request):
-        crewmen = Crewman.objects.select_related("user").annotate(
-            tanks_count=Count("tanks")
-        )
-        data = [
-            {
-                "id": c.id,
-                "username": c.user.username,
-                "credits": c.credits,
-                "garage_slots": c.garage_slots,
-                "tanks_count": c.tanks_count,
-            }
-            for c in crewmen
-        ]
+        data = []
+        for crewman in Crewman.objects.all():
+            data.append({
+                "id": crewman.id,
+                "username": crewman.user.username,
+                "credits": crewman.credits,
+                "garage_slots": crewman.garage_slots,
+                "tanks_count": crewman.tanks.count(),
+            })
         return Response(data)
 
     def update(self, request, pk=None):
-        try:
-            crewman = Crewman.objects.get(pk=pk)
-        except (Crewman.DoesNotExist, ValueError):
-            return Response(
-                {"error": "Игрок не найден"}, status=status.HTTP_404_NOT_FOUND
-            )
+        crewman = get_object_or_404(Crewman, pk=pk)
+        credits = int(request.data.get("credits", crewman.credits))
+        garage_slots = int(request.data.get("garage_slots", crewman.garage_slots))
 
-        serializer = CrewmanUpdateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
+        if credits < 0:
+            return Response({"error": "Кредиты не могут быть отрицательными"}, status=400)
+        if garage_slots < crewman.tanks.count() or garage_slots < 1:
+            return Response({"error": "Мест в ангаре не может быть меньше, чем танков у игрока"}, status=400)
 
-        if "garage_slots" in data and data["garage_slots"] < crewman.tanks.count():
-            return Response(
-                {"error": "Мест в ангаре не может быть меньше, чем танков у игрока"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        update_fields = []
-        if "credits" in data:
-            crewman.credits = data["credits"]
-            update_fields.append("credits")
-        if "garage_slots" in data:
-            crewman.garage_slots = data["garage_slots"]
-            update_fields.append("garage_slots")
-        if update_fields:
-            crewman.save(update_fields=update_fields)
-
-        return Response(
-            {
-                "success": True,
-                "credits": crewman.credits,
-                "garage_slots": crewman.garage_slots,
-            }
-        )
-
+        crewman.credits = credits
+        crewman.garage_slots = garage_slots
+        crewman.save()
+        return Response({"success": True, "credits": crewman.credits, "garage_slots": crewman.garage_slots})
 
 class TankViewSet(
     mixins.ListModelMixin,
@@ -318,140 +185,78 @@ class TankViewSet(
 ):
     serializer_class = TankSerializer
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = [
-        "owner__user__username",
-        "owner__id",
-        "nation__name",
-        "level__level_number",
-        "is_in_battle",
-    ]
+    filterset_fields = ["owner__id", "nation__name", "level__level_number", "is_in_battle"]
 
     def get_queryset(self):
-        # Игрок видит только свои танки; сотрудник с 2FA — танки всех игроков.
-        # Поэтому чужой танк для обычного игрока не найдётся (404) ни в update, ни в действиях.
-        qs = Tank.objects.select_related("owner__user", "nation", "level")
-        if is_staff_with_2fa(self.request):
-            return qs
-        return qs.filter(owner=get_crewman(self.request.user))
+        if is_admin(self.request):
+            return Tank.objects.all()
+        return Tank.objects.filter(owner=get_crewman(self.request.user))
 
     def update(self, request, *args, **kwargs):
         if self.get_object().is_in_battle:
-            raise PermissionDenied("Танк в бою")
+            return Response({"error": "Танк в бою"}, status=400)
         return super().update(request, *args, **kwargs)
 
     @action(detail=False, methods=["POST"], url_path="create")
     def create_tank(self, request):
-        name = (request.data.get("name") or "").strip()
+        name = request.data.get("name")
         nation_id = request.data.get("nation")
         level_id = request.data.get("level")
-        picture = request.FILES.get("picture")
+        if not name or not nation_id or not level_id:
+            return Response({"error": "Заполните название, нацию и уровень"}, status=400)
 
-        if not all([name, nation_id, level_id]):
-            return Response(
-                {"error": "Заполните название, нацию и уровень"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if len(name) > Tank._meta.get_field("name").max_length:
-            return Response(
-                {"error": "Название танка слишком длинное (максимум 100 символов)"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if picture:
-            if picture.size > MAX_UPLOAD_SIZE:
-                return Response(
-                    {"error": "Файл слишком большой (максимум 5 МБ)"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            try:
-                drf_serializers.ImageField().run_validation(picture)
-            except DRFValidationError:
-                return Response(
-                    {"error": "Файл не является изображением"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
+        nation = get_object_or_404(Nation, id=nation_id)
+        level = get_object_or_404(Level, id=level_id)
         crewman = get_crewman(request.user)
 
-        try:
-            nation = Nation.objects.get(id=nation_id)
-            level = Level.objects.get(id=level_id)
-        except (Nation.DoesNotExist, Level.DoesNotExist, ValueError):
-            return Response(
-                {"error": "Неверная нация или уровень"}, status=status.HTTP_400_BAD_REQUEST
-            )
+        if crewman.credits < level.creation_cost:
+            return Response({"error": f"Недостаточно кредитов. Нужно {level.creation_cost}"}, status=400)
+        if crewman.tanks.count() >= crewman.garage_slots:
+            return Response({"error": "Нет свободных мест в ангаре"}, status=400)
 
-        cost = level.creation_cost
-        with transaction.atomic():
-            paid = Crewman.objects.filter(pk=crewman.pk, credits__gte=cost).update(
-                credits=F("credits") - cost
-            )
-            crewman.refresh_from_db(fields=["credits", "garage_slots"])
-            if not paid:
-                return Response(
-                    {"error": f"Недостаточно кредитов. Нужно {cost}, у вас {crewman.credits}"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if crewman.tanks.count() >= crewman.garage_slots:
-                # ответ без исключения не откатывает транзакцию сам — откатываем списание явно
-                transaction.set_rollback(True)
-                return Response(
-                    {"error": "Нет свободных мест в ангаре"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            tank = Tank.objects.create(
-                name=name, owner=crewman, nation=nation, level=level, picture=picture
-            )
-
-        serializer = self.get_serializer(tank)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        crewman.credits -= level.creation_cost
+        crewman.save()
+        tank = Tank.objects.create(
+            name=name,
+            owner=crewman,
+            nation=nation,
+            level=level,
+            picture=request.FILES.get("picture"),
+        )
+        return Response(TankSerializer(tank).data, status=201)
 
     @action(detail=True, methods=["POST"], url_path="upgrade")
     def upgrade_tank(self, request, pk=None):
         tank = self.get_object()
         if tank.is_in_battle:
-            return Response({"error": "Танк в бою"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Танк в бою"}, status=400)
 
         next_level = Level.objects.filter(level_number=tank.level.level_number + 1).first()
         if next_level is None:
-            return Response(
-                {"error": "Танк уже максимального уровня"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        cost = next_level.creation_cost // 2  # то же, что Level.upgrade_to_next_cost
+            return Response({"error": "Танк уже максимального уровня"}, status=400)
 
-        with transaction.atomic():
-            paid = Crewman.objects.filter(
-                pk=tank.owner_id, credits__gte=cost
-            ).update(credits=F("credits") - cost)
-            if not paid:
-                tank.owner.refresh_from_db(fields=["credits"])
-                return Response(
-                    {"error": f"Не хватает кредитов. Нужно {cost}, у вас {tank.owner.credits}"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            # Условие в filter защищает от гонки: танк мог уйти в бой или уже улучшиться
-            upgraded = Tank.objects.filter(
-                pk=tank.pk, level_id=tank.level_id, is_in_battle=False
-            ).update(level=next_level)
-            if not upgraded:
-                transaction.set_rollback(True)
-                return Response(
-                    {"error": "Нельзя улучшить: танк в бою или уже улучшен"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+        cost = next_level.creation_cost // 2
+        owner = tank.owner
+        if owner.credits < cost:
+            return Response({"error": f"Не хватает кредитов. Нужно {cost}"}, status=400)
 
+        owner.credits -= cost
+        owner.save()
+        tank.level = next_level
+        tank.save()
         return Response({"success": True, "new_level": next_level.level_number})
 
     @action(detail=True, methods=["POST"], url_path="sell")
     def sell_tank(self, request, pk=None):
         tank = self.get_object()
+        if tank.is_in_battle:
+            return Response({"error": "Танк в бою"}, status=400)
+
         price = tank.sell_price
-        if not tank.sell():
-            return Response(
-                {"error": "Танк уже продан или находится в бою"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        owner = tank.owner
+        owner.credits += price
+        owner.save()
+        tank.delete()
         return Response({"success": True, "credits_earned": price})
 
     @action(detail=False, methods=["GET"], url_path="stats")
@@ -462,168 +267,103 @@ class TankViewSet(
             max_level=Max("level__level_number"),
             min_level=Min("level__level_number"),
         )
-        if stats["avg_level"] is None:
-            stats["avg_level"] = 0
         return Response(stats)
 
-
-class BattleRecordViewSet(
-    mixins.ListModelMixin, mixins.RetrieveModelMixin, GenericViewSet
-):
+class BattleRecordViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, GenericViewSet):
     serializer_class = BattleRecordSerializer
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ["result", "battle_level__level_number", "tank__name", "crewman", "tank"]
+    filterset_fields = ["result", "crewman", "tank"]
 
     def get_queryset(self):
-        qs = BattleRecord.objects.select_related(
-            "tank__level", "crewman__user", "battle_level"
-        ).order_by("-started_at")
-        if is_staff_with_2fa(self.request):
-            return qs
-        return qs.filter(crewman=get_crewman(self.request.user))
+        if is_admin(self.request):
+            return BattleRecord.objects.all()
+        return BattleRecord.objects.filter(crewman=get_crewman(self.request.user))
 
     @action(detail=False, methods=["POST"], url_path="start")
     def start_battle(self, request):
-        tank_id = request.data.get("tank_id")
-        battle_level_id = request.data.get("battle_level_id")
-
-        if not tank_id or not battle_level_id:
-            return Response(
-                {"error": "Выберите танк и уровень боя"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         crewman = get_crewman(request.user)
-        try:
-            tank = Tank.objects.select_related("level").get(id=tank_id, owner=crewman)
-            battle_level = Level.objects.get(id=battle_level_id)
-        except (Tank.DoesNotExist, Level.DoesNotExist, ValueError):
-            return Response(
-                {"error": "Неверный танк или уровень"}, status=status.HTTP_400_BAD_REQUEST
-            )
+        tank = get_object_or_404(Tank, id=request.data.get("tank_id"), owner=crewman)
+        battle_level = get_object_or_404(Level, id=request.data.get("battle_level_id"))
 
         if tank.is_in_battle:
-            return Response(
-                {"error": "Танк уже в бою"}, status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Доступны бои на уровне танка и на соседних уровнях (±1)
+            return Response({"error": "Танк уже в бою"}, status=400)
         if abs(battle_level.level_number - tank.level.level_number) > 1:
-            return Response(
-                {"error": "Этот уровень боя недоступен для танка"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"error": "Этот уровень боя недоступен для танка"}, status=400)
 
-        with transaction.atomic():
-            marked = Tank.objects.filter(
-                pk=tank.pk, owner=crewman, is_in_battle=False
-            ).update(is_in_battle=True)
-            if not marked:
-                return Response(
-                    {"error": "Танк уже в бою"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            battle_record = BattleRecord.objects.create(
-                tank=tank, crewman=crewman, battle_level=battle_level
-            )
+        tank.is_in_battle = True
+        tank.save()
+        battle = BattleRecord.objects.create(tank=tank, crewman=crewman, battle_level=battle_level)
 
-        serializer = BattleRecordSerializer(battle_record)
-        return Response(
-            {"battle_duration": battle_record.duration, **serializer.data},
-            status=status.HTTP_201_CREATED,
-        )
-
-    @action(detail=True, methods=["GET"], url_path="remaining-time")
-    def remaining_time(self, request, pk=None):
-        battle = self.get_object()
-        if battle.result != "pending":
-            return Response(
-                {"remaining": 0, "finished": True, "result": battle.result}
-            )
-
-        elapsed = (timezone.now() - battle.started_at).total_seconds()
-        return Response(
-            {
-                "remaining": math.ceil(max(0, battle.duration - elapsed)),
-                "finished": False,
-                "total_duration": battle.duration,
-            }
-        )
+        data = BattleRecordSerializer(battle).data
+        data["battle_duration"] = tank.level.level_number
+        return Response(data, status=201)
 
     @action(detail=True, methods=["POST"], url_path="claim")
     def claim_battle(self, request, pk=None):
         battle = self.get_object()
         if battle.result != "pending":
-            return Response(
-                {"error": "Бой уже завершён"}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": "Бой уже завершён"}, status=400)
 
+        tank_level = battle.tank.level.level_number
+        battle_level = battle.battle_level.level_number
         elapsed = (timezone.now() - battle.started_at).total_seconds()
-        if elapsed < battle.duration:
-            remaining = math.ceil(battle.duration - elapsed)
-            return Response(
-                {
-                    "error": f"Бой ещё не закончился. Осталось {remaining} секунд.",
-                    "remaining": remaining,
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if elapsed < tank_level:
+            return Response({"error": "Бой ещё не закончился"}, status=400)
 
-        tank_lvl = battle.tank.level.level_number
-        battle_lvl = battle.battle_level.level_number
-        if battle_lvl < tank_lvl:
+        if battle_level < tank_level:
             win_chance = 100
-        elif battle_lvl == tank_lvl:
+        elif battle_level == tank_level:
             win_chance = 75
         else:
             win_chance = 25
 
-        is_victory = random.randint(1, 100) <= win_chance
-        if battle.process_battle_result(is_victory) is None:
-            return Response(
-                {"error": "Бой уже завершён"}, status=status.HTTP_400_BAD_REQUEST
-            )
+        if random.randint(1, 100) <= win_chance:
+            battle.result = "victory"
+            battle.reward_earned = battle.battle_level.battle_reward
+            battle.crewman.credits += battle.reward_earned
+            battle.crewman.save()
+        else:
+            battle.result = "defeat"
+        battle.finished_at = timezone.now()
+        battle.save()
 
-        serializer = BattleRecordSerializer(battle)
-        return Response(serializer.data)
+        battle.tank.is_in_battle = False
+        battle.tank.save()
+        return Response(BattleRecordSerializer(battle).data)
+
+    @action(detail=True, methods=["POST"], url_path="cancel")
+    def cancel_battle(self, request, pk=None):
+        battle = self.get_object()
+        if battle.result != "pending":
+            return Response({"error": "Бой уже завершён"}, status=400)
+
+        battle.result = "defeat"
+        battle.finished_at = timezone.now()
+        battle.save()
+        battle.tank.is_in_battle = False
+        battle.tank.save()
+        return Response({"success": True})
 
     @action(detail=False, methods=["GET"], url_path="stats")
     def battle_stats(self, request):
-        if is_staff_with_2fa(request):
-            queryset = BattleRecord.objects.all()
-        else:
-            queryset = BattleRecord.objects.filter(crewman=get_crewman(request.user))
-
-        stats = queryset.aggregate(
+        battles = self.get_queryset()
+        stats = battles.aggregate(
             total_battles=Count("id"),
             victories=Count("id", filter=Q(result="victory")),
             defeats=Count("id", filter=Q(result="defeat")),
             total_reward=Sum("reward_earned"),
             avg_reward=Avg("reward_earned"),
         )
-        # Процент побед считается только по завершённым боям (бои «в ожидании» не учитываются)
         finished = stats["victories"] + stats["defeats"]
         stats["win_rate"] = round(stats["victories"] / finished * 100, 1) if finished else 0
-        if stats["avg_reward"] is None:
-            stats["avg_reward"] = 0
         return Response(stats)
-
-    @action(detail=True, methods=["POST"], url_path="cancel")
-    def cancel_battle(self, request, pk=None):
-        battle = self.get_object()
-        if not BattleRecord.cancel_pending(BattleRecord.objects.filter(pk=battle.pk)):
-            return Response(
-                {"error": "Бой уже завершён"}, status=status.HTTP_400_BAD_REQUEST
-            )
-        return Response({"success": True, "message": "Бой отменён"})
-
 
 class UserViewSet(GenericViewSet):
     permission_classes = [permissions.AllowAny]
 
     @action(detail=False, methods=["GET"], url_path="info")
     def get_info(self, request):
-        get_token(request._request)  # гарантирует cookie csrftoken для SPA
+        get_token(request)
         data = {
             "username": request.user.username if request.user.is_authenticated else None,
             "is_authenticated": request.user.is_authenticated,
@@ -634,124 +374,82 @@ class UserViewSet(GenericViewSet):
             crewman = get_crewman(request.user)
             data["credits"] = crewman.credits
             data["garage_slots"] = crewman.garage_slots
-            data["second"] = has_2fa(request)  # второй фактор (2FA) подтверждён
+            data["second"] = has_2fa(request)
             data["crewman_id"] = crewman.id
         return Response(data)
 
     @action(detail=False, methods=["POST"], url_path="login")
     def login_user(self, request):
-        username = request.data.get("username")
-        password = request.data.get("password")
-        user = authenticate(username=username, password=password)
-        if user:
-            login(request, user)
-            # при повторном входе того же пользователя Django сохраняет сессию — сбрасываем 2FA явно
-            clear_2fa(request)
-            return Response({"success": True})
-        return Response({"success": False}, status=status.HTTP_401_UNAUTHORIZED)
+        user = authenticate(username=request.data.get("username"), password=request.data.get("password"))
+        if user is None:
+            return Response({"success": False}, status=401)
+        login(request, user)
+        request.session.pop("2fa_at", None)
+        return Response({"success": True})
 
     @action(detail=False, methods=["POST"], url_path="logout")
     def logout_user(self, request):
-        logout(request)  # очищает всю сессию, в том числе отметку 2FA
+        logout(request)
         return Response({"success": True})
 
     @action(detail=False, methods=["GET"], url_path="get-totp")
     def get_totp(self, request):
-        if not request.user.is_authenticated:
-            return Response({"error": "Требуется вход"}, status=401)
         if not request.user.is_staff:
             return Response({"error": "Доступ запрещён"}, status=403)
         crewman = get_crewman(request.user)
         if crewman.totp_confirmed:
-            # Секрет уже привязан: повторно его не отдаём
             return Response({"url": None, "confirmed": True})
         if not crewman.totp_key:
             crewman.totp_key = pyotp.random_base32()
-            crewman.save(update_fields=["totp_key"])
-        totp = pyotp.TOTP(crewman.totp_key)
-        provisioning_uri = totp.provisioning_uri(
-            name=request.user.username, issuer_name="TankBattles"
-        )
-        return Response({"url": provisioning_uri, "confirmed": False})
+            crewman.save()
+        url = pyotp.TOTP(crewman.totp_key).provisioning_uri(name=request.user.username, issuer_name="TankBattles")
+        return Response({"url": url, "confirmed": False})
 
     @action(detail=False, methods=["POST"], url_path="second-login")
     def second_login(self, request):
         if not request.user.is_authenticated:
             return Response({"error": "Требуется вход"}, status=401)
-        key = request.data.get("key")
-        if not key:
-            return Response({"error": "Введите код"}, status=400)
         crewman = get_crewman(request.user)
         if not crewman.totp_key:
             return Response({"error": "2FA не настроена"}, status=400)
-        totp = pyotp.TOTP(crewman.totp_key)
-        if totp.verify(str(key), valid_window=1):
-            if not crewman.totp_confirmed:
-                crewman.totp_confirmed = True
-                crewman.save(update_fields=["totp_confirmed"])
-            set_2fa(request)
-            return Response({"success": True})
-        return Response({"success": False}, status=400)
+        if not pyotp.TOTP(crewman.totp_key).verify(str(request.data.get("key"))):
+            return Response({"success": False}, status=400)
+        crewman.totp_confirmed = True
+        crewman.save()
+        request.session["2fa_at"] = time.time()
+        return Response({"success": True})
 
-    @action(
-        detail=False,
-        methods=["GET"],
-        url_path="export-all-stats",
-        permission_classes=[IsStaffAnd2FAVerified],
-    )
+    @action(detail=False, methods=["GET"], url_path="export-all-stats", permission_classes=[IsAdminWith2FA])
     def export_all_stats(self, request):
         wb = Workbook()
 
-        ws_tanks = wb.active
-        ws_tanks.title = "Танки"
-        fill_sheet(
-            ws_tanks,
-            ["ID", "Название", "Владелец", "Нация", "Уровень", "Урон/мин", "В бою", "Создан"],
-            [
-                [t.id, t.name, t.owner.user.username, t.nation.name, t.level.level_number,
-                 t.dpm, "Да" if t.is_in_battle else "Нет", format_dt(t.created_at)]
-                for t in Tank.objects.select_related("owner__user", "nation", "level")
-            ],
-        )
+        ws = wb.active
+        ws.title = "Танки"
+        ws.append(["ID", "Название", "Владелец", "Нация", "Уровень", "Урон/мин", "В бою", "Создан"])
+        for t in Tank.objects.all():
+            ws.append([t.id, t.name, t.owner.user.username, t.nation.name, t.level.level_number,
+                       t.dpm, "Да" if t.is_in_battle else "Нет", t.created_at.strftime("%Y-%m-%d %H:%M")])
 
-        fill_sheet(
-            wb.create_sheet("Бои"),
-            ["ID", "Танк", "Игрок", "Уровень боя", "Результат", "Награда", "Начало", "Завершение"],
-            [
-                [b.id, b.tank.name, b.crewman.user.username, b.battle_level.level_number,
-                 b.get_result_display(), b.reward_earned, format_dt(b.started_at),
-                 format_dt(b.finished_at)]
-                for b in BattleRecord.objects.select_related("tank", "crewman__user", "battle_level")
-            ],
-        )
+        ws = wb.create_sheet("Бои")
+        ws.append(["ID", "Танк", "Игрок", "Уровень боя", "Результат", "Награда", "Начало"])
+        for b in BattleRecord.objects.all():
+            ws.append([b.id, b.tank.name, b.crewman.user.username, b.battle_level.level_number,
+                       b.get_result_display(), b.reward_earned, b.started_at.strftime("%Y-%m-%d %H:%M")])
 
-        fill_sheet(
-            wb.create_sheet("Игроки"),
-            ["ID", "Имя", "Кредиты", "Слоты", "Танков", "Дата регистрации"],
-            [
-                [c.id, c.user.username, c.credits, c.garage_slots, c.tanks_count,
-                 format_dt(c.created_at)]
-                for c in Crewman.objects.select_related("user").annotate(tanks_count=Count("tanks"))
-            ],
-        )
+        ws = wb.create_sheet("Игроки")
+        ws.append(["ID", "Имя", "Кредиты", "Слоты", "Танков"])
+        for c in Crewman.objects.all():
+            ws.append([c.id, c.user.username, c.credits, c.garage_slots, c.tanks.count()])
 
-        fill_sheet(
-            wb.create_sheet("Нации"),
-            ["ID", "Название", "Количество танков"],
-            [
-                [n.id, n.name, n.tanks_count]
-                for n in Nation.objects.annotate(tanks_count=Count("tanks"))
-            ],
-        )
+        ws = wb.create_sheet("Нации")
+        ws.append(["ID", "Название", "Количество танков"])
+        for n in Nation.objects.all():
+            ws.append([n.id, n.name, n.tanks.count()])
 
-        fill_sheet(
-            wb.create_sheet("Уровни"),
-            ["ID", "Уровень", "Стоимость создания", "Награда за бой"],
-            [
-                [lv.id, lv.level_number, lv.creation_cost, lv.battle_reward]
-                for lv in Level.objects.all()
-            ],
-        )
+        ws = wb.create_sheet("Уровни")
+        ws.append(["ID", "Уровень", "Стоимость создания", "Награда за бой"])
+        for lv in Level.objects.all():
+            ws.append([lv.id, lv.level_number, lv.creation_cost, lv.battle_reward])
 
         buffer = io.BytesIO()
         wb.save(buffer)

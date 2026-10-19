@@ -1,276 +1,194 @@
 <script setup>
 import axios from 'axios';
-import { onBeforeMount, ref, provide } from 'vue';
+import { ref } from 'vue';
+import { storeToRefs } from 'pinia';
+import { useRouter } from 'vue-router';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
-import { storeToRefs } from "pinia";
-import { useRouter } from 'vue-router'
-import ImageViewer from '@/views/ImageViewer.vue';
-import { showSuccess, showError } from '@/utils/notifications';
 
 const userStore = useUserStore();
 const tanksStore = useTanksStore();
 const { userInfo } = storeToRefs(userStore);
+const router = useRouter();
 
-const showNav = ref(false);
-const showDropdown = ref(false);
-const showLoginModal = ref(false);
-const showRegisterModal = ref(false);
-const show2FAModal = ref(false);
-const twoFACode = ref('');
+const loginForm = ref({ username: '', password: '' });
+const registerForm = ref({ username: '', email: '', password: '', password2: '' });
 const qrcodeUrl = ref('');
+const twoFACode = ref('');
 
-const loginUsername = ref('');
-const loginPassword = ref('');
-const loginError = ref('');
-
-const regUsername = ref('');
-const regEmail = ref('');
-const regPassword = ref('');
-const regConfirmPassword = ref('');
-const regError = ref('');
-
-const imageViewer = ref(null);
-const router = useRouter()
-
-provide('openImageViewer', (url) => {
-    if (imageViewer.value) imageViewer.value.open(url);
-});
-
-async function getTotpKey() {
+async function onLogin() {
     try {
-        const r = await axios.get('/api/user/get-totp/');
-        if (r.data.url) {
-            const QRCode = (await import('qrcode')).default;
-            qrcodeUrl.value = await QRCode.toDataURL(r.data.url);
-        } else {
-            // 2FA уже привязана: секрет повторно не выдаётся, нужен только код
-            qrcodeUrl.value = '';
-        }
-        show2FAModal.value = true;
+        await userStore.login(loginForm.value.username, loginForm.value.password);
+        loginForm.value = { username: '', password: '' };
     } catch (error) {
-        console.error(error);
-        showError('Ошибка', 'Не удалось получить QR-код');
+        alert('Неверное имя пользователя или пароль');
     }
 }
 
-async function verify2FA() {
+async function onRegister() {
+    if (registerForm.value.password !== registerForm.value.password2) {
+        alert('Пароли не совпадают');
+        return;
+    }
+    try {
+        await userStore.register(registerForm.value.username, registerForm.value.password, registerForm.value.email);
+        registerForm.value = { username: '', email: '', password: '', password2: '' };
+    } catch (error) {
+        alert(error.response.data.error);
+    }
+}
+
+async function onLogout() {
+    await userStore.logout();
+    tanksStore.resetStore();
+    router.push('/');
+}
+
+async function onOpen2FA() {
+    const r = await axios.get('/api/user/get-totp/');
+    if (r.data.url) {
+        const QRCode = (await import('qrcode')).default;
+        qrcodeUrl.value = await QRCode.toDataURL(r.data.url);
+    } else {
+        qrcodeUrl.value = '';
+    }
+}
+
+async function onCheck2FA() {
     try {
         await axios.post('/api/user/second-login/', { key: twoFACode.value });
         await userStore.checkLogin();
         twoFACode.value = '';
-        show2FAModal.value = false;
-        showSuccess('2FA активирована', 'Двухфакторная аутентификация успешно включена');
     } catch (error) {
-        showError('Ошибка', 'Неверный код');
+        alert('Неверный код');
     }
 }
-
-// Данные ангара после входа загружает GarageView (watch на is_authenticated)
-async function handleLogin() {
-    loginError.value = '';
-    try {
-        await userStore.login(loginUsername.value, loginPassword.value);
-        if (userInfo.value.is_authenticated) {
-            showLoginModal.value = false;
-            loginUsername.value = '';
-            loginPassword.value = '';
-        }
-    } catch (error) {
-        loginError.value = 'Неверное имя пользователя или пароль';
-    }
-}
-
-async function handleRegister() {
-    regError.value = '';
-    if (regPassword.value !== regConfirmPassword.value) {
-        regError.value = 'Пароли не совпадают';
-        return;
-    }
-    if (regPassword.value.length < 6) {
-        regError.value = 'Пароль должен быть не менее 6 символов';
-        return;
-    }
-    try {
-        await userStore.register(regUsername.value, regPassword.value, regEmail.value);
-        if (userInfo.value.is_authenticated) {
-            showRegisterModal.value = false;
-            regUsername.value = '';
-            regEmail.value = '';
-            regPassword.value = '';
-            regConfirmPassword.value = '';
-        }
-    } catch (error) {
-        regError.value = error.response?.data?.error || 'Ошибка регистрации';
-    }
-}
-
-// logout на сервере очищает всю сессию, включая отметку 2FA
-async function handleLogout() {
-    await userStore.logout();
-    tanksStore.resetStore();
-    sessionStorage.removeItem('selectedUserId');
-    showDropdown.value = false;
-    router.push('/');
-}
-
-// Данные пользователя загружает router.beforeEach, здесь — только справочники
-onBeforeMount(() => {
-    tanksStore.fetchNations();
-    tanksStore.fetchLevels();
-});
 </script>
 
 <template>
-    <nav class="custom-navbar">
-        <div class="custom-container">
-            <div class="navbar-content">
-                <button class="navbar-toggler" @click="showNav = !showNav">☰</button>
-                <div class="navbar-links" :class="{ show: showNav }">
-                    <ul class="nav-list">
-                        <li v-if="userInfo.is_authenticated">
-                            <router-link class="nav-link" to="/">Ангар</router-link>
-                        </li>
-                        <li v-if="userInfo.is_authenticated">
-                            <router-link class="nav-link" to="/tanks">Создать танк</router-link>
-                        </li>
-                        <li v-if="userInfo.is_authenticated">
-                            <router-link class="nav-link" to="/battles">Сражения</router-link>
-                        </li>
-                        <li v-if="userInfo.is_authenticated">
-                            <router-link class="nav-link" to="/battle-history">История</router-link>
-                        </li>
-                        <li v-if="userInfo.is_staff">
-                            <router-link class="nav-link" to="/levels">Уровни</router-link>
-                        </li>
-                        <li v-if="userInfo.is_staff">
-                            <router-link class="nav-link" to="/nations">Нации</router-link>
-                        </li>
-                        <li v-if="userInfo.is_staff">
-                            <router-link class="nav-link" to="/stats">Статистика</router-link>
-                        </li>
-                        <li v-if="userInfo.is_staff && userInfo.second">
-                            <router-link class="nav-link" to="/crewmen">Пользователи</router-link>
-                        </li>
-                    </ul>
-                    <ul class="nav-list ms-auto">
-                        <li v-if="userInfo.is_authenticated && userInfo.is_staff && !userInfo.second">
-                            <button class="btn-custom-warning" @click="getTotpKey">
-                                🔐 2FA
-                            </button>
-                        </li>
-                        <li v-if="userInfo.is_authenticated && userInfo.second">
-                            <span class="badge-2fa-active">2FA</span>
-                        </li>
-                        <li v-if="!userInfo.is_authenticated">
-                            <button class="btn-custom-primary" @click="showLoginModal = true">Вход</button>
-                        </li>
-                        <li v-if="!userInfo.is_authenticated">
-                            <button class="btn-custom-danger" @click="showRegisterModal = true">Регистрация</button>
-                        </li>
-                        <li class="dropdown" :class="{ open: showDropdown }" v-if="userInfo.is_authenticated">
-                            <a class="nav-link dropdown-toggle" href="#" @click.prevent="showDropdown = !showDropdown">
-                                {{ userInfo.username }}
-                            </a>
-                            <ul class="dropdown-menu-custom" v-if="showDropdown">
-                                <template v-if="userInfo.is_staff">
-                                    <li><a href="/admin">Админка</a></li>
-                                    <li><hr style="margin: 5px 0;"></li>
-                                </template>
-                                <li><a href="#" @click="handleLogout">Выйти</a></li>
-                            </ul>
-                        </li>
-                    </ul>
-                </div>
-            </div>
+    <nav class="navbar navbar-expand navbar-dark bg-dark mb-4">
+        <div class="container">
+            <ul class="navbar-nav me-auto">
+                <template v-if="userInfo.is_authenticated">
+                    <li class="nav-item"><router-link class="nav-link" to="/">Ангар</router-link></li>
+                    <li class="nav-item"><router-link class="nav-link" to="/tanks">Создать танк</router-link></li>
+                    <li class="nav-item"><router-link class="nav-link" to="/battles">Сражения</router-link></li>
+                    <li class="nav-item"><router-link class="nav-link" to="/battle-history">История</router-link></li>
+                </template>
+                <template v-if="userInfo.is_staff">
+                    <li class="nav-item"><router-link class="nav-link" to="/levels">Уровни</router-link></li>
+                    <li class="nav-item"><router-link class="nav-link" to="/nations">Нации</router-link></li>
+                    <li class="nav-item"><router-link class="nav-link" to="/stats">Статистика</router-link></li>
+                </template>
+                <li class="nav-item" v-if="userInfo.is_staff && userInfo.second">
+                    <router-link class="nav-link" to="/crewmen">Пользователи</router-link>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <template v-if="!userInfo.is_authenticated">
+                    <li class="nav-item">
+                        <button class="btn btn-primary me-2" data-bs-toggle="modal" data-bs-target="#loginModal">Вход</button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#registerModal">Регистрация</button>
+                    </li>
+                </template>
+                <template v-else>
+                    <li class="nav-item" v-if="userInfo.is_staff && !userInfo.second">
+                        <button class="btn btn-warning me-2" data-bs-toggle="modal" data-bs-target="#twoFAModal" @click="onOpen2FA">2FA</button>
+                    </li>
+                    <li class="nav-item" v-if="userInfo.second">
+                        <span class="navbar-text me-3">2FA пройдена</span>
+                    </li>
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">{{ userInfo.username }}</a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li v-if="userInfo.is_staff"><a class="dropdown-item" href="/admin">Админка</a></li>
+                            <li><a class="dropdown-item" href="#" @click.prevent="onLogout">Выйти</a></li>
+                        </ul>
+                    </li>
+                </template>
+            </ul>
         </div>
     </nav>
 
-    <div class="custom-container main-content">
+    <div class="container">
         <router-view />
     </div>
-    <div class="bg__own"></div>
 
-    <ImageViewer ref="imageViewer" />
-
-    <div v-if="showLoginModal" class="modal-overlay">
-        <div class="modal-dialog-custom">
-            <div class="custom-modal-content">
-                <div class="custom-modal-header">
-                    <h5>Вход в аккаунт</h5>
-                    <button class="close-btn" @click="showLoginModal = false">&times;</button>
+    <div class="modal" id="loginModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Вход</h5>
                 </div>
-                <div class="custom-modal-body">
-                    <div class="form-group">
-                        <label>Имя пользователя</label>
-                        <input type="text" class="custom-form-control" v-model="loginUsername">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Имя пользователя</label>
+                        <input type="text" class="form-control" v-model="loginForm.username">
                     </div>
-                    <div class="form-group">
-                        <label>Пароль</label>
-                        <input type="password" class="custom-form-control" v-model="loginPassword">
+                    <div class="mb-3">
+                        <label class="form-label">Пароль</label>
+                        <input type="password" class="form-control" v-model="loginForm.password">
                     </div>
-                    <div v-if="loginError" class="alert-custom-danger">{{ loginError }}</div>
                 </div>
-                <div class="custom-modal-footer">
-                    <button class="btn-custom-secondary" @click="showLoginModal = false">Отмена</button>
-                    <button class="btn-custom-danger" @click="handleLogin">Войти</button>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button class="btn btn-primary" data-bs-dismiss="modal" @click="onLogin">Войти</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <div v-if="showRegisterModal" class="modal-overlay">
-        <div class="modal-dialog-custom">
-            <div class="custom-modal-content">
-                <div class="custom-modal-header">
-                    <h5>Регистрация</h5>
-                    <button class="close-btn" @click="showRegisterModal = false">&times;</button>
+    <div class="modal" id="registerModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Регистрация</h5>
                 </div>
-                <div class="custom-modal-body">
-                    <div class="form-group">
-                        <label>Имя пользователя</label>
-                        <input type="text" class="custom-form-control" v-model="regUsername">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Имя пользователя</label>
+                        <input type="text" class="form-control" v-model="registerForm.username">
                     </div>
-                    <div class="form-group">
-                        <label>Email</label>
-                        <input type="email" class="custom-form-control" v-model="regEmail">
+                    <div class="mb-3">
+                        <label class="form-label">Email</label>
+                        <input type="email" class="form-control" v-model="registerForm.email">
                     </div>
-                    <div class="form-group">
-                        <label>Пароль</label>
-                        <input type="password" class="custom-form-control" v-model="regPassword">
+                    <div class="mb-3">
+                        <label class="form-label">Пароль</label>
+                        <input type="password" class="form-control" v-model="registerForm.password">
                     </div>
-                    <div class="form-group">
-                        <label>Подтвердите пароль</label>
-                        <input type="password" class="custom-form-control" v-model="regConfirmPassword">
+                    <div class="mb-3">
+                        <label class="form-label">Повторите пароль</label>
+                        <input type="password" class="form-control" v-model="registerForm.password2">
                     </div>
-                    <div v-if="regError" class="alert-custom-danger">{{ regError }}</div>
                 </div>
-                <div class="custom-modal-footer">
-                    <button class="btn-custom-secondary" @click="showRegisterModal = false">Отмена</button>
-                    <button class="btn-custom-success" @click="handleRegister">Зарегистрироваться</button>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button class="btn btn-success" data-bs-dismiss="modal" @click="onRegister">Зарегистрироваться</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <div v-if="show2FAModal" class="modal-overlay">
-        <div class="modal-dialog-custom">
-            <div class="custom-modal-content">
-                <div class="custom-modal-header">
-                    <h5>Двухфакторная аутентификация</h5>
-                    <button class="close-btn" @click="show2FAModal = false">&times;</button>
+    <div class="modal" id="twoFAModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Двухфакторная аутентификация</h5>
                 </div>
-                <div class="custom-modal-body">
-                    <p v-if="qrcodeUrl">Отсканируйте QR-код в приложении (Google Authenticator, Яндекс Ключ и т.д.)</p>
-                    <img v-if="qrcodeUrl" :src="qrcodeUrl" style="max-width: 100%; margin-bottom: 15px;">
-                    <div class="form-group">
-                        <label>Введите 6-значный код из приложения</label>
-                        <input type="text" class="custom-form-control" v-model="twoFACode" placeholder="000000">
+                <div class="modal-body">
+                    <div v-if="qrcodeUrl" class="text-center mb-3">
+                        <p>Отсканируйте QR-код в приложении-аутентификаторе</p>
+                        <img :src="qrcodeUrl">
                     </div>
+                    <label class="form-label">Код из приложения</label>
+                    <input type="text" class="form-control" v-model="twoFACode">
                 </div>
-                <div class="custom-modal-footer">
-                    <button class="btn-custom-secondary" @click="show2FAModal = false">Отмена</button>
-                    <button class="btn-custom-warning" @click="verify2FA">Активировать</button>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button class="btn btn-warning" data-bs-dismiss="modal" @click="onCheck2FA">Подтвердить</button>
                 </div>
             </div>
         </div>

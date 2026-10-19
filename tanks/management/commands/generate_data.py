@@ -1,8 +1,8 @@
 import random
 from datetime import timedelta
-from django.core.management.base import BaseCommand
+
 from django.contrib.auth.models import User
-from django.db.models import F
+from django.core.management.base import BaseCommand
 from django.utils import timezone
 from faker import Faker
 
@@ -10,147 +10,78 @@ from tanks.models import Nation, Level, Crewman, Tank, BattleRecord
 
 
 class Command(BaseCommand):
-    help = 'Generate test data for the Tanks application'
+    help = 'Заполняет базу тестовыми данными'
 
     def add_arguments(self, parser):
-        parser.add_argument('--users', type=int, default=250, help='Number of regular users to create')
-        parser.add_argument('--tanks', type=int, default=1500, help='Total number of tanks to create')
-        parser.add_argument('--battles', type=int, default=5000, help='Total number of battle records to create')
+        parser.add_argument('--users', type=int, default=250)
+        parser.add_argument('--tanks', type=int, default=1500)
+        parser.add_argument('--battles', type=int, default=5000)
 
     def handle(self, *args, **options):
-        fake = Faker(['ru_RU'])
-        users_count = options['users']
-        tanks_total = options['tanks']
-        battles_total = options['battles']
+        fake = Faker('ru_RU')
 
-        self.stdout.write(self.style.SUCCESS('Starting data generation...'))
-
-        nations_data = [
-            'СССР', 'Германия', 'США', 'Франция', 'Великобритания',
-            'Япония', 'Китай', 'Швеция', 'Италия', 'Польша'
-        ]
-        for name in nations_data:
+        for name in ['СССР', 'Германия', 'США', 'Франция', 'Великобритания',
+                     'Япония', 'Китай', 'Швеция', 'Италия', 'Польша']:
             Nation.objects.get_or_create(name=name)
         nations = list(Nation.objects.all())
-        self.stdout.write(f'✓ Nations: {len(nations)}')
 
-        for i in range(1, 16):
-            Level.objects.get_or_create(level_number=i)
+        for number in range(1, 16):
+            Level.objects.get_or_create(level_number=number)
         levels = list(Level.objects.all())
-        self.stdout.write(f'✓ Levels: {len(levels)}')
 
-        self.stdout.write(f'Creating {users_count} regular users...')
-        crewmen_list = []
-        existing_usernames = set(User.objects.values_list('username', flat=True))
+        crewmen = []
+        for i in range(options['users']):
+            username = f'user_{i + 1}'
+            if User.objects.filter(username=username).exists():
+                username = f'user_{i + 1}_{random.randint(1, 999)}'
+            user = User.objects.create_user(username=username, password='testpass123')
+            crewman = Crewman.objects.create(
+                user=user,
+                credits=random.randint(5000, 50000),
+                garage_slots=random.randint(5, 15),
+            )
+            crewmen.append(crewman)
 
-        for i in range(users_count):
-            username = f"user_{i+1}"
-            while username in existing_usernames:
-                username = f"user_{i+1}_{random.randint(1,999)}"
-            existing_usernames.add(username)
-            email = f"{username}@example.com"
-            password = 'testpass123'
-
-            user = User.objects.create_user(username=username, email=email, password=password)
-
-            credits = random.randint(5000, 50000)
-            garage_slots = random.randint(5, 15)
-            crewman = Crewman.objects.create(user=user, credits=credits, garage_slots=garage_slots)
-            crewmen_list.append(crewman)
-
-            if (i+1) % 50 == 0:
-                self.stdout.write(f'  Created {i+1} users...')
-
-        self.stdout.write(self.style.SUCCESS(f'✓ Created {len(crewmen_list)} crewmen'))
-        
-        self.stdout.write(f'Creating {tanks_total} tanks...')
-        tank_names_pool = [
-            'Т-34', 'КВ-1', 'ИС-2', 'Т-54', 'Т-62', 'Т-72', 'Т-90',
-            'Panther', 'Tiger I', 'Tiger II', 'Leopard 1', 'Leopard 2',
-            'M4 Sherman', 'M26 Pershing', 'M48 Patton', 'M1 Abrams',
-            'Churchill', 'Centurion', 'Challenger 2',
-            'Leclerc', 'Type 90', 'Type 10', 'K2 Black Panther',
-            'Strv 103', 'Ariete', 'PT-91 Twardy'
-        ]
-
-        # Не выдаём танков больше, чем мест в ангаре у игрока
-        slots_left = {c.id: c.garage_slots for c in crewmen_list}
-
+        tank_names = ['Т-34', 'КВ-1', 'ИС-2', 'Т-54', 'Т-72', 'Panther', 'Tiger I', 'Leopard 2',
+                      'M4 Sherman', 'M1 Abrams', 'Centurion', 'Leclerc', 'Type 90', 'Strv 103']
         tanks_created = 0
-        for _ in range(tanks_total):
-            candidates = [c for c in crewmen_list if slots_left[c.id] > 0]
-            if not candidates:
-                self.stdout.write(self.style.WARNING('  Нет свободных мест в ангарах, остановка'))
+        for i in range(options['tanks']):
+            if not crewmen:
                 break
-            crewman = random.choice(candidates)
-            slots_left[crewman.id] -= 1
-            name = random.choice(tank_names_pool) + f' {random.randint(1, 99)}'
-            nation = random.choice(nations)
-            level = random.choice(levels)
-
+            crewman = crewmen[i % len(crewmen)]
+            if crewman.tanks.count() >= crewman.garage_slots:
+                continue
             Tank.objects.create(
-                name=name,
+                name=f'{random.choice(tank_names)} {random.randint(1, 99)}',
                 owner=crewman,
-                nation=nation,
-                level=level,
+                nation=random.choice(nations),
+                level=random.choice(levels),
             )
             tanks_created += 1
-            if tanks_created % 200 == 0:
-                self.stdout.write(f'  Created {tanks_created} tanks...')
 
-        self.stdout.write(self.style.SUCCESS(f'✓ Created {tanks_created} tanks'))
-
-        self.stdout.write(f'Creating {battles_total} battle records...')
-        all_tanks = list(Tank.objects.select_related('level'))
-        if not all_tanks:
-            battles_total = 0  # без танков бои создавать не из чего
-        battles_created = 0
-        rewards = {}
-
-        for _ in range(battles_total):
-            tank = random.choice(all_tanks)
+        tanks = list(Tank.objects.all())
+        for _ in range(options['battles']):
+            if not tanks:
+                break
+            tank = random.choice(tanks)
             tank_level = tank.level.level_number
-            # Как в игре: бой доступен на уровнях танка -1, 0, +1
-            battle_level = random.choice(
-                [l for l in levels if abs(l.level_number - tank_level) <= 1]
-            )
+            battle_level = random.choice([l for l in levels if abs(l.level_number - tank_level) <= 1])
             result = random.choice(['victory', 'defeat'])
             reward = battle_level.battle_reward if result == 'victory' else 0
-
-            started_at = timezone.make_aware(
-                fake.date_time_between(start_date='-60d', end_date='now')
-            )
-            # Длительность боя в игре = уровень танка в секундах
-            finished_at = started_at + timedelta(seconds=tank_level)
+            started_at = timezone.make_aware(fake.date_time_between(start_date='-60d', end_date='now'))
 
             battle = BattleRecord.objects.create(
                 tank=tank,
-                crewman_id=tank.owner_id,
+                crewman=tank.owner,
                 battle_level=battle_level,
                 result=result,
                 reward_earned=reward,
-                finished_at=finished_at
+                finished_at=started_at + timedelta(seconds=tank_level),
             )
-            # started_at — auto_now_add, при создании перезаписывается; задаём через update()
             BattleRecord.objects.filter(pk=battle.pk).update(started_at=started_at)
-            rewards[tank.owner_id] = rewards.get(tank.owner_id, 0) + reward
-            battles_created += 1
-            if battles_created % 500 == 0:
-                self.stdout.write(f'  Created {battles_created} battles...')
 
-        # Награды за бои должны попадать в кредиты игроков
-        for crewman_id, total in rewards.items():
-            if total:
-                Crewman.objects.filter(pk=crewman_id).update(credits=F('credits') + total)
+            owner = Crewman.objects.get(pk=tank.owner_id)
+            owner.credits += reward
+            owner.save()
 
-        self.stdout.write(self.style.SUCCESS(f'✓ Created {battles_created} battle records'))
-
-        self.stdout.write(self.style.SUCCESS('\n' + '='*50))
-        self.stdout.write(self.style.SUCCESS('DATA GENERATION COMPLETED!'))
-        self.stdout.write('='*50)
-        self.stdout.write(f'Нации: {Nation.objects.count()}')
-        self.stdout.write(f'Уровни: {Level.objects.count()}')
-        self.stdout.write(f'Обычные пользователи: {Crewman.objects.exclude(user__is_superuser=True).count()}')
-        self.stdout.write(f'Танки: {Tank.objects.count()}')
-        self.stdout.write(f'Записи о боях: {BattleRecord.objects.count()}')
-        self.stdout.write('='*50)
+        self.stdout.write(f'Создано: игроков {len(crewmen)}, танков {tanks_created}, боёв {options["battles"]}')

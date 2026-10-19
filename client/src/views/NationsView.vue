@@ -1,157 +1,137 @@
 <script setup>
 import { onBeforeMount, ref } from 'vue';
+import { storeToRefs } from 'pinia';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
-import { storeToRefs } from "pinia";
-import { showSuccess, showError, showConfirm, getErrorMessage } from '@/utils/notifications';
 
 const userStore = useUserStore();
 const tanksStore = useTanksStore();
-
 const { userInfo } = storeToRefs(userStore);
 const { nations } = storeToRefs(tanksStore);
 
-const newNationName = ref('');
-const flagFile = ref(null);
-const flagInput = ref(null);
-const editNation = ref(null);
-const editFlagFile = ref(null);
-const showEditModal = ref(false);
+const nationToAdd = ref({ name: '' });
+const nationToEdit = ref({});
+const flagRef = ref(null);
+const editFlagRef = ref(null);
 
 onBeforeMount(async () => {
     await tanksStore.fetchNations();
 });
 
-// Общая подготовка данных формы для создания и изменения нации
-function buildNationForm(rawName, file) {
-    const name = rawName.trim();
-    if (!name) {
-        showError('Ошибка', 'Введите название нации');
-        return null;
-    }
+async function onNationAdd() {
     const formData = new FormData();
-    formData.append('name', name);
-    if (file) formData.append('flag', file);
-    return formData;
-}
-
-async function createNation() {
-    const formData = buildNationForm(newNationName.value, flagFile.value);
-    if (!formData) return;
+    formData.append('name', nationToAdd.value.name);
+    if (flagRef.value.files[0]) {
+        formData.append('flag', flagRef.value.files[0]);
+    }
     try {
         await tanksStore.createNation(formData);
-        newNationName.value = '';
-        flagFile.value = null;
-        if (flagInput.value) flagInput.value.value = '';
-        showSuccess('Добавлено', 'Нация создана');
-    } catch (err) {
-        showError('Ошибка', getErrorMessage(err, 'Не удалось создать нацию'));
+    } catch (error) {
+        alert('Ошибка: ' + JSON.stringify(error.response.data));
     }
+    nationToAdd.value = { name: '' };
+    flagRef.value.value = '';
 }
 
-async function updateNation() {
-    if (!editNation.value) return;
-    const formData = buildNationForm(editNation.value.name, editFlagFile.value);
-    if (!formData) return;
+function onEditClick(nation) {
+    nationToEdit.value = { ...nation };
+}
+
+async function onNationUpdate() {
+    const formData = new FormData();
+    formData.append('name', nationToEdit.value.name);
+    if (editFlagRef.value.files[0]) {
+        formData.append('flag', editFlagRef.value.files[0]);
+    }
     try {
-        await tanksStore.updateNation(editNation.value.id, formData);
-        showEditModal.value = false;
-        editNation.value = null;
-        editFlagFile.value = null;
-        showSuccess('Сохранено', 'Нация обновлена');
-    } catch (err) {
-        showError('Ошибка', getErrorMessage(err, 'Не удалось сохранить нацию'));
+        await tanksStore.updateNation(nationToEdit.value.id, formData);
+    } catch (error) {
+        alert('Ошибка: ' + JSON.stringify(error.response.data));
     }
+    editFlagRef.value.value = '';
 }
 
-async function deleteNation(id) {
-    if (!(await showConfirm('Удалить нацию?'))) return;
+async function onRemoveClick(nation) {
+    if (!confirm(`Удалить нацию ${nation.name}?`)) {
+        return;
+    }
     try {
-        await tanksStore.deleteNation(id);
-        showSuccess('Удалено', 'Нация удалена');
-    } catch (err) {
-        showError('Ошибка', getErrorMessage(err, 'Не удалось удалить нацию'));
+        await tanksStore.deleteNation(nation.id);
+    } catch (error) {
+        alert(error.response.data.error);
     }
-}
-
-function openEditModal(nation) {
-    editNation.value = { ...nation };
-    editFlagFile.value = null;
-    showEditModal.value = true;
 }
 </script>
 
 <template>
-    <div class="custom-container">
-        <div v-if="userInfo.is_authenticated && userInfo.is_staff">
-            <div class="custom-card mb-4">
-                <div class="custom-card-header bg-danger">Управление нациями</div>
-                <div class="custom-card-body" v-if="userInfo.second">
-                    <h5>Добавить нацию</h5>
-                    <div class="row">
-                        <div class="col-md-5">
-                            <input type="text" class="custom-form-control" v-model="newNationName" placeholder="Название нации">
-                        </div>
-                        <div class="col-md-5">
-                            <input type="file" class="custom-form-control" ref="flagInput" @change="flagFile = $event.target.files[0]" accept="image/*">
-                        </div>
-                        <div class="col-md-2">
-                            <button class="btn-custom-success w-100" @click="createNation">Добавить</button>
-                        </div>
-                    </div>
+    <div class="card mb-3" v-if="userInfo.second">
+        <div class="card-header">Добавить нацию</div>
+        <div class="card-body">
+            <form @submit.prevent.stop="onNationAdd" class="row">
+                <div class="col">
+                    <input type="text" class="form-control" v-model="nationToAdd.name" placeholder="Название" required>
                 </div>
-                <div class="custom-card-body" v-else>
-                    <div class="alert-custom-warning mb-0">
-                        Для добавления, изменения и удаления наций требуется двухфакторная аутентификация
-                    </div>
+                <div class="col">
+                    <input type="file" class="form-control" ref="flagRef" accept="image/*">
                 </div>
-            </div>
-
-            <div class="row">
-                <div class="col-md-3 mb-3" v-for="nation in nations" :key="nation.id">
-                    <div class="custom-card text-center">
-                        <div class="custom-card-body">
-                            <div class="mb-2">
-                                <img v-if="nation.flag" :src="nation.flag" style="max-width: 100px; max-height: 50px;">
-                                <div v-else style="font-size: 40px;">🚩</div>
-                            </div>
-                            <h5>{{ nation.name }}</h5>
-                            <button class="btn-custom-warning btn-sm me-1"  v-if="userInfo.second" @click="openEditModal(nation)">✏️</button>
-                            <button class="btn-custom-danger btn-sm"  v-if="userInfo.second" @click="deleteNation(nation.id)">🗑️</button>
-                        </div>
-                    </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-success">Добавить</button>
                 </div>
-            </div>
+            </form>
         </div>
-        <div v-else class="alert-custom-warning">Доступ только для администраторов</div>
+    </div>
+    <div class="alert alert-warning" v-else>Для изменения наций нужна двухфакторная аутентификация</div>
+
+    <div class="card">
+        <div class="card-header">Нации</div>
+        <div class="card-body">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Флаг</th>
+                        <th>Название</th>
+                        <th v-if="userInfo.second"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="nation in nations" :key="nation.id">
+                        <td>
+                            <img v-if="nation.flag" :src="nation.flag" height="30">
+                            <span v-else>нет флага</span>
+                        </td>
+                        <td>{{ nation.name }}</td>
+                        <td v-if="userInfo.second">
+                            <button class="btn btn-secondary btn-sm me-2" data-bs-toggle="modal" data-bs-target="#editNationModal"
+                                    @click="onEditClick(nation)">Изменить</button>
+                            <button class="btn btn-danger btn-sm" @click="onRemoveClick(nation)">Удалить</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 
-    <div v-if="showEditModal" class="modal-overlay">
-        <div class="modal-dialog-custom">
-            <div class="custom-modal-content">
-                <div class="custom-modal-header">
-                    <h5>Редактировать нацию</h5>
-                    <button class="close-btn" @click="showEditModal = false">&times;</button>
+    <div class="modal" id="editNationModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Изменить нацию</h5>
                 </div>
-                <div class="custom-modal-body">
-                    <div class="form-group">
-                        <label>Название</label>
-                        <input type="text" class="custom-form-control" v-model="editNation.name">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Название</label>
+                        <input type="text" class="form-control" v-model="nationToEdit.name">
                     </div>
-                    <div v-if="editNation?.flag" class="form-group">
-                        <label>Текущий флаг</label><br>
-                        <img :src="editNation.flag" style="max-width: 100px;">
-                    </div>
-                    <div class="form-group">
-                        <label>Новый флаг (оставьте пустым, чтобы не менять)</label>
-                        <input type="file" class="custom-form-control" @change="editFlagFile = $event.target.files[0]" accept="image/*">
+                    <div class="mb-3">
+                        <label class="form-label">Новый флаг</label>
+                        <input type="file" class="form-control" ref="editFlagRef" accept="image/*">
                     </div>
                 </div>
-                <div class="custom-modal-footer">
-                    <button class="btn-custom-secondary" @click="showEditModal = false">Отмена</button>
-                    <button class="btn-custom-primary" @click="updateNation">Сохранить</button>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button class="btn btn-primary" data-bs-dismiss="modal" @click="onNationUpdate">Сохранить</button>
                 </div>
             </div>
         </div>
     </div>
-</template>
+</template>

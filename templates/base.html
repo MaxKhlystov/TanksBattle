@@ -8,7 +8,7 @@
         body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
         h1 { color: #2c3e50; }
         h2 { color: #34495e; border-bottom: 2px solid #7f8c8d; padding-bottom: 5px; }
-        table { border-collapse: collapse; width: 100%; margin-bottom: 30px; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 30px; background: white; }
         th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
         th { background-color: #2c3e50; color: white; }
         tr:nth-child(even) { background-color: #f9f9f9; }
@@ -19,8 +19,6 @@
     <div class="container">
         <h1>Панель управления танковыми сражениями</h1>
         <p>Все данные из базы данных на текущий момент.</p>
-
-        <!-- Нации -->
         <h2>Нации</h2>
         <table>
             <thead>
@@ -44,8 +42,6 @@
                 {% endfor %}
             </tbody>
         </table>
-
-        <!-- Уровни -->
         <h2>Уровни танков</h2>
         <table>
             <thead>
@@ -65,12 +61,10 @@
                 {% endfor %}
             </tbody>
         </table>
-
-        <!-- Игроки (Crewman) -->
         <h2>Игроки (экипаж)</h2>
         <table>
             <thead>
-                <tr><th>ID</th><th>Пользователь</th><th>Кредиты</th><th>Мест в ангаре</th><th>Свободно мест</th><th>Дата регистрации</th></tr>
+                <tr><th>ID</th><th>Пользователь</th><th>Кредиты</th><th>Мест в ангаре</th><th>Дата регистрации</th></tr>
             </thead>
             <tbody>
                 {% for crewman in crewmen %}
@@ -79,16 +73,13 @@
                     <td>{{ crewman.user.username }}</td>
                     <td>{{ crewman.credits }}</td>
                     <td>{{ crewman.garage_slots }}</td>
-                    <td>{{ crewman.free_slots }}</td>
                     <td>{{ crewman.created_at|date:"Y-m-d H:i" }}</td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="6">Нет игроков</td></tr>
+                <tr><td colspan="5">Нет игроков</td></tr>
                 {% endfor %}
             </tbody>
         </table>
-
-        <!-- Танки -->
         <h2>Танки</h2>
         <table>
             <thead>
@@ -111,8 +102,6 @@
                 {% endfor %}
             </tbody>
         </table>
-
-        <!-- Записи боёв -->
         <h2>История боёв</h2>
         <table>
             <thead>
@@ -137,4 +126,4 @@
         </table>
     </div>
 </body>
-</html>
+</html>

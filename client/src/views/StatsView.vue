@@ -1,207 +1,87 @@
 <script setup>
-import { ref, onBeforeMount } from 'vue';
+import { onBeforeMount, ref } from 'vue';
 import axios from 'axios';
+import { storeToRefs } from 'pinia';
 import { useUserStore } from '@/stores/user_store';
-import { storeToRefs } from "pinia";
-import { showSuccess, showError } from '@/utils/notifications';
 
 const userStore = useUserStore();
 const { userInfo } = storeToRefs(userStore);
 
-const tankStats = ref(null);
-const battleStats = ref(null);
-const nationStats = ref(null);
-const levelStats = ref(null);
-const loading = ref(true);
+const tankStats = ref({});
+const battleStats = ref({});
+const nationStats = ref({});
+const levelStats = ref({ level_distribution: [] });
 
-async function loadAllStats() {
-    loading.value = true;
-    try {
-        const [ts, bs, ns, ls] = await Promise.all([
-            axios.get('/api/tanks/stats/'),
-            axios.get('/api/battles/stats/'),
-            axios.get('/api/nations/stats/'),
-            axios.get('/api/levels/stats/')
-        ]);
-        tankStats.value = ts.data;
-        battleStats.value = bs.data;
-        nationStats.value = ns.data;
-        levelStats.value = ls.data;
-    } catch (error) {
-        console.error('Ошибка загрузки статистики:', error);
-        showError('Ошибка', 'Не удалось загрузить статистику');
-    } finally {
-        loading.value = false;
-    }
-}
-
-function distPercent(count) {
-    const total = tankStats.value?.total_tanks || 0;
-    return total ? Math.round((count || 0) / total * 100) : 0;
-}
-
-async function exportAllToExcel() {
-    try {
-        const response = await axios.get('/api/user/export-all-stats/', { responseType: 'blob' });
-        // при responseType: 'blob' axios уже возвращает Blob
-        const link = document.createElement('a');
-        const objectUrl = URL.createObjectURL(response.data);
-        link.href = objectUrl;
-        link.setAttribute('download', 'full_statistics.xlsx');
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(objectUrl);
-        showSuccess('Экспорт завершён', 'Файл full_statistics.xlsx скачан');
-    } catch (error) {
-        console.error('Ошибка экспорта:', error);
-        if (error.response?.status === 403) {
-            showError('Нужна 2FA', 'Для экспорта подтвердите двухфакторную аутентификацию');
-        } else {
-            showError('Ошибка', 'Не удалось скачать файл');
-        }
-    }
-}
-
-onBeforeMount(() => {
-    loadAllStats();
+onBeforeMount(async () => {
+    tankStats.value = (await axios.get('/api/tanks/stats/')).data;
+    battleStats.value = (await axios.get('/api/battles/stats/')).data;
+    nationStats.value = (await axios.get('/api/nations/stats/')).data;
+    levelStats.value = (await axios.get('/api/levels/stats/')).data;
 });
+
+async function onExport() {
+    const r = await axios.get('/api/user/export-all-stats/', { responseType: 'blob' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(r.data);
+    link.download = 'full_statistics.xlsx';
+    link.click();
+}
 </script>
 
 <template>
-    <div class="custom-container">
-        <div v-if="userInfo.is_authenticated && userInfo.is_staff">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h2 class="stats-title">Статистика</h2>
-                <button class="btn-custom-success" :disabled="!userInfo.second"
-                        :title="!userInfo.second ? 'Нужна двухфакторная аутентификация' : ''"
-                        @click="exportAllToExcel">
-                    📊 Экспорт всей статистики в Excel
-                </button>
-            </div>
-            <div v-if="!userInfo.second" class="alert-custom-warning">
-                Для экспорта в Excel требуется двухфакторная аутентификация
-            </div>
-
-            <div v-if="loading" class="text-center p-5">
-                <div class="alert-custom-info">Загрузка статистики...</div>
-            </div>
-
-            <div v-else>
-                <div class="custom-card mb-4" v-if="tankStats">
-                    <div class="custom-card-header bg-primary">Статистика танков</div>
-                    <div class="custom-card-body">
-                        <div class="row text-center">
-                            <div class="col-md-3">
-                                <h3 class="text-primary">{{ tankStats.total_tanks || 0 }}</h3>
-                                <p>Всего танков</p>
-                            </div>
-                            <div class="col-md-3">
-                                <h3 class="text-success">{{ tankStats.avg_level?.toFixed(1) || 0 }}</h3>
-                                <p>Средний уровень</p>
-                            </div>
-                            <div class="col-md-3">
-                                <h3 class="text-warning">{{ tankStats.max_level || 0 }}</h3>
-                                <p>Макс. уровень</p>
-                            </div>
-                            <div class="col-md-3">
-                                <h3 class="text-info">{{ tankStats.min_level || 0 }}</h3>
-                                <p>Мин. уровень</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="custom-card mb-4" v-if="battleStats">
-                    <div class="custom-card-header bg-success">Статистика боёв</div>
-                    <div class="custom-card-body">
-                        <div class="row text-center">
-                            <div class="col-md-3">
-                                <h3 class="text-primary">{{ battleStats.total_battles || 0 }}</h3>
-                                <p>Всего боёв</p>
-                            </div>
-                            <div class="col-md-3">
-                                <h3 class="text-success">{{ battleStats.victories || 0 }}</h3>
-                                <p>Побед</p>
-                            </div>
-                            <div class="col-md-3">
-                                <h3 class="text-danger">{{ battleStats.defeats || 0 }}</h3>
-                                <p>Поражений</p>
-                            </div>
-                            <div class="col-md-3">
-                                <h3 class="text-warning">{{ battleStats.win_rate || 0 }}%</h3>
-                                <p>Winrate</p>
-                            </div>
-                        </div>
-                        <div class="alert alert-info mt-3">
-                            <strong>Всего заработано:</strong> {{ battleStats.total_reward || 0 }} 💰
-                        </div>
-                    </div>
-                </div>
-
-                <div class="custom-card mb-4" v-if="nationStats">
-                    <div class="custom-card-header bg-warning text-dark">Статистика наций</div>
-                    <div class="custom-card-body">
-                        <div class="row text-center">
-                            <div class="col-md-4">
-                                <h3>{{ nationStats.total_nations || 0 }}</h3>
-                                <p>Всего наций</p>
-                            </div>
-                            <div class="col-md-4">
-                                <h3>{{ nationStats.total_tanks || 0 }}</h3>
-                                <p>Всего танков</p>
-                            </div>
-                            <div class="col-md-4">
-                                <h3>{{ nationStats.avg_tanks_per_nation?.toFixed(1) || 0 }}</h3>
-                                <p>Среднее танков на нацию</p>
-                            </div>
-                        </div>
-                        <div class="alert alert-info mt-3">
-                            <strong>Самая популярная нация:</strong> {{ nationStats.most_popular_nation || '—' }} 
-                            ({{ nationStats.most_popular_tanks_count || 0 }} танков)
-                        </div>
-                    </div>
-                </div>
-
-                <div class="custom-card mb-4" v-if="levelStats">
-                    <div class="custom-card-header bg-info text-white">Статистика уровней</div>
-                    <div class="custom-card-body">
-                        <div class="row text-center">
-                            <div class="col-md-3">
-                                <h3>{{ levelStats.total_levels || 0 }}</h3>
-                                <p>Всего уровней</p>
-                            </div>
-                            <div class="col-md-3">
-                                <h3>{{ levelStats.min_level || 0 }}</h3>
-                                <p>Мин. уровень</p>
-                            </div>
-                            <div class="col-md-3">
-                                <h3>{{ levelStats.max_level || 0 }}</h3>
-                                <p>Макс. уровень</p>
-                            </div>
-                            <div class="col-md-3">
-                                <h3>{{ levelStats.avg_level?.toFixed(1) || 0 }}</h3>
-                                <p>Средний уровень</p>
-                            </div>
-                        </div>
-                        <div class="mt-3">
-                            <strong>Распределение танков по уровням:</strong>
-                            <div class="mt-2" v-for="dist in levelStats.level_distribution" :key="dist.level_number">
-                                <div class="d-flex justify-content-between">
-                                    <span>Уровень {{ dist.level_number }}:</span>
-                                    <span>{{ dist.tanks_count || 0 }} танков</span>
-                                </div>
-                                <div class="progress mb-2">
-                                    <div class="progress-bar bg-danger" 
-                                         :style="{ width: distPercent(dist.tanks_count) + '%' }">
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div v-else class="alert-custom-warning">Доступ только для администраторов</div>
+    <div class="mb-3">
+        <button class="btn btn-success" @click="onExport" :disabled="!userInfo.second">Экспорт статистики в Excel</button>
+        <span class="text-white ms-2" v-if="!userInfo.second">Для экспорта нужна двухфакторная аутентификация</span>
     </div>
-</template>
+
+    <div class="card mb-3">
+        <div class="card-header">Танки</div>
+        <div class="card-body">
+            <p class="mb-1">Всего танков: {{ tankStats.total_tanks }}</p>
+            <p class="mb-1">Средний уровень: {{ tankStats.avg_level }}</p>
+            <p class="mb-1">Максимальный уровень: {{ tankStats.max_level }}</p>
+            <p class="mb-0">Минимальный уровень: {{ tankStats.min_level }}</p>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Бои</div>
+        <div class="card-body">
+            <p class="mb-1">Всего боёв: {{ battleStats.total_battles }}</p>
+            <p class="mb-1">Побед: {{ battleStats.victories }}</p>
+            <p class="mb-1">Поражений: {{ battleStats.defeats }}</p>
+            <p class="mb-1">Процент побед: {{ battleStats.win_rate }}%</p>
+            <p class="mb-0">Всего заработано: {{ battleStats.total_reward }}</p>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Нации</div>
+        <div class="card-body">
+            <p class="mb-1">Всего наций: {{ nationStats.total_nations }}</p>
+            <p class="mb-1">Среднее количество танков на нацию: {{ nationStats.avg_tanks_per_nation }}</p>
+            <p class="mb-0">Самая популярная нация: {{ nationStats.most_popular_nation }} ({{ nationStats.most_popular_tanks_count }} танков)</p>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Уровни</div>
+        <div class="card-body">
+            <p>Всего уровней: {{ levelStats.total_levels }}</p>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Уровень</th>
+                        <th>Количество танков</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="row in levelStats.level_distribution" :key="row.level_number">
+                        <td>{{ row.level_number }}</td>
+                        <td>{{ row.tanks_count }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</template>

@@ -1,10 +1,6 @@
-# tanks/models.py
-
-from django.db import models, transaction
-from django.db.models import F
+from django.db import models
 from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator, MaxValueValidator
-from django.utils import timezone
 
 class Nation(models.Model):
     name = models.CharField("Название нации", max_length=50, unique=True)
@@ -30,15 +26,11 @@ class Level(models.Model):
 
     @property
     def creation_cost(self):
-        if not self.level_number:
-            return 0
         n = self.level_number
         return 1000 * (n * (n + 1) // 2)
 
     @property
     def upgrade_to_next_cost(self):
-        if not self.level_number:
-            return None
         next_level = Level.objects.filter(level_number=self.level_number + 1).first()
         if next_level:
             return next_level.creation_cost // 2
@@ -46,8 +38,6 @@ class Level(models.Model):
 
     @property
     def battle_reward(self):
-        if not self.level_number:
-            return 0
         return (100 + 25 * self.level_number) * self.level_number
 
     class Meta:
@@ -64,10 +54,7 @@ class Crewman(models.Model):
     totp_confirmed = models.BooleanField(default=False)
 
     def __str__(self):
-        return f"{self.user.username} (Кредитов: {self.credits})"
-
-    def available_garage_slots(self):
-        return self.garage_slots - self.tanks.count()
+        return self.user.username
 
     class Meta:
         verbose_name = "Член экипажа"
@@ -83,7 +70,7 @@ class Tank(models.Model):
     picture = models.ImageField("Основное изображение", upload_to="images/tanks/", null=True, blank=True)
 
     def __str__(self):
-        return f"{self.name} ({self.nation}) - {self.level}"
+        return self.name
 
     @property
     def dpm(self):
@@ -96,19 +83,6 @@ class Tank(models.Model):
     @property
     def sell_price(self):
         return self.level.creation_cost // 2
-
-    def sell(self):
-        if self.is_in_battle:
-            return False
-        price = self.sell_price
-        with transaction.atomic():
-            deleted, _ = Tank.objects.filter(
-                pk=self.pk, owner_id=self.owner_id, is_in_battle=False
-            ).delete()
-            if not deleted:
-                return False
-            Crewman.objects.filter(pk=self.owner_id).update(credits=F('credits') + price)
-        return True
 
     class Meta:
         verbose_name = "Танк"
@@ -130,50 +104,9 @@ class BattleRecord(models.Model):
     finished_at = models.DateTimeField("Время завершения", null=True, blank=True)
 
     def __str__(self):
-        return f"{self.tank.name} - {self.get_result_display()} на {self.battle_level}"
-
-    @property
-    def duration(self):
-        """Длительность боя в секундах: равна уровню танка."""
-        return self.tank.level.level_number
-
-    @staticmethod
-    def cancel_pending(battles):
-        """
-        Переводит незавершённые бои из выборки в поражение и освобождает их танки.
-        Единая точка для отмены боя игроком, удаления уровня и действия в админке.
-        Возвращает количество отменённых боёв.
-        """
-        with transaction.atomic():
-            pending = battles.filter(result='pending')
-            Tank.objects.filter(pk__in=pending.values('tank_id')).update(is_in_battle=False)
-            return pending.update(result='defeat', reward_earned=0, finished_at=timezone.now())
-
-    def process_battle_result(self, is_victory):
-        """
-        Возвращает True/False (победа/поражение) или None, если бой уже был обработан.
-        Результат фиксируется атомарно: награда начисляется ровно один раз.
-        """
-        reward = self.battle_level.battle_reward if is_victory else 0
-        now = timezone.now()
-        with transaction.atomic():
-            updated = BattleRecord.objects.filter(pk=self.pk, result='pending').update(
-                result='victory' if is_victory else 'defeat',
-                reward_earned=reward,
-                finished_at=now,
-            )
-            if not updated:
-                self.refresh_from_db()
-                return None
-            if reward:
-                Crewman.objects.filter(pk=self.crewman_id).update(credits=F('credits') + reward)
-            Tank.objects.filter(pk=self.tank_id).update(is_in_battle=False)
-        self.result = 'victory' if is_victory else 'defeat'
-        self.reward_earned = reward
-        self.finished_at = now
-        return is_victory
+        return f"{self.tank.name} - {self.get_result_display()}"
 
     class Meta:
         verbose_name = "Запись о сражении"
         verbose_name_plural = "Записи о сражениях"
-        ordering = ['-started_at']
+        ordering = ['-started_at']
