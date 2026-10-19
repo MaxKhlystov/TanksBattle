@@ -1,5 +1,6 @@
 <script setup>
 import axios from 'axios';
+import QRCode from 'qrcode';
 import { ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useRouter } from 'vue-router';
@@ -47,7 +48,6 @@ async function onLogout() {
 async function onOpen2FA() {
     const r = await axios.get('/api/user/get-totp/');
     if (r.data.url) {
-        const QRCode = (await import('qrcode')).default;
         qrcodeUrl.value = await QRCode.toDataURL(r.data.url);
     } else {
         qrcodeUrl.value = '';

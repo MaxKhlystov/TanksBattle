@@ -19,7 +19,7 @@ export const useUserStore = defineStore("userStore", () => {
 
     async function checkLogin() {
         const r = await axios.get("/api/user/info/");
-        userInfo.value = { ...emptyUser(), ...r.data };
+        userInfo.value = Object.assign({}, emptyUser(), r.data);
     }
 
     async function login(username, password) {

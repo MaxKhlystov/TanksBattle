@@ -1,5 +1,6 @@
 from django.contrib import admin
 from .models import Nation, Level, Crewman, Tank, BattleRecord
+from .permissions import is_admin
 
 @admin.register(Nation)
 class NationAdmin(admin.ModelAdmin):
@@ -25,3 +26,8 @@ class TankAdmin(admin.ModelAdmin):
 class BattleRecordAdmin(admin.ModelAdmin):
     list_display = ['id', 'tank', 'crewman', 'battle_level', 'result', 'reward_earned', 'started_at']
     list_filter = ['result', 'battle_level']
+
+def has_permission(request):
+    return is_admin(request)
+
+admin.site.has_permission = has_permission

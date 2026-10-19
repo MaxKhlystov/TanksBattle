@@ -92,7 +92,7 @@ async function onExpandGarage() {
 }
 
 function onEditClick(tank) {
-    tankToEdit.value = { ...tank };
+    tankToEdit.value = Object.assign({}, tank);
 }
 
 async function onUpdateTank() {

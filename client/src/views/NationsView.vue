@@ -34,7 +34,7 @@ async function onNationAdd() {
 }
 
 function onEditClick(nation) {
-    nationToEdit.value = { ...nation };
+    nationToEdit.value = Object.assign({}, nation);
 }
 
 async function onNationUpdate() {
