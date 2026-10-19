@@ -1,6 +1,5 @@
 <script setup>
 import { onMounted, ref, watch } from 'vue';
-import axios from 'axios';
 import { storeToRefs } from 'pinia';
 import { useUserStore } from '@/stores/user_store';
 import { useTanksStore } from '@/stores/tanks_store';
@@ -103,7 +102,7 @@ async function onUpdateTank() {
         formData.append('picture', editPictureRef.value.files[0]);
     }
     try {
-        await axios.put(`/api/tanks/${tankToEdit.value.id}/`, formData);
+        await tanksStore.updateTank(tankToEdit.value.id, formData);
     } catch (error) {
         alert('Ошибка: ' + JSON.stringify(error.response.data));
     }

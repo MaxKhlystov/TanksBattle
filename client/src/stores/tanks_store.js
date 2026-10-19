@@ -22,6 +22,10 @@ export const useTanksStore = defineStore("tanksStore", () => {
         await axios.post(`/api/tanks/${id}/upgrade/`);
     }
 
+    async function updateTank(id, data) {
+       await axios.put(`/api/tanks/${id}/`, data);
+    }
+
     async function sellTank(id) {
         await axios.post(`/api/tanks/${id}/sell/`);
     }
